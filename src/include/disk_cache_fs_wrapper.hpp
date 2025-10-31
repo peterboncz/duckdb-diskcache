@@ -39,8 +39,7 @@ public:
 	DiskCacheFileHandle(FileSystem &fs, string original_path, unique_ptr<FileHandle> wrapped_handle,
 	                    shared_ptr<DiskCache> cache)
 	    : FileHandle(fs, wrapped_handle->GetPath(), wrapped_handle->GetFlags()),
-	      wrapped_handle(std::move(wrapped_handle)), cache(cache), uri(std::move(original_path)),
-	      file_position(0) {
+	      wrapped_handle(std::move(wrapped_handle)), cache(cache), uri(std::move(original_path)), file_position(0) {
 	}
 	~DiskCacheFileHandle() override = default;
 	void Close() override {

@@ -92,9 +92,7 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	}
 	std::lock_guard<std::mutex> lock(regex_mutex);
 	auto cache_entry = UpsertEntry(uri);
-	if (!cache_entry) {
-		return; // collision (rare)
-	}
+
 	// Check (under lock) if range already cached (in the meantime, due to concurrent reads)
 	auto hit_range = AnalyzeRange(*this, uri, pos, len);
 	idx_t offset = 0, final_size = 0, range_start = pos, range_end = range_start + len;

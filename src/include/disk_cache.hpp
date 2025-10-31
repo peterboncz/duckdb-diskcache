@@ -160,16 +160,16 @@ struct DiskCache {
 
 		// Extract last 15 characters of URI filename (after last separator)
 		idx_t last_sep = uri.find_last_of(path_sep);
-		string filename_suffix = (last_sep != string::npos && uri.length() > last_sep + 1)
-			? uri.substr(std::max<idx_t>(last_sep + 1, uri.length() > 15 ? uri.length() - 15 : 0))
-			: (uri.length() > 15 ? uri.substr(uri.length() - 15) : uri);
+		string filename_suffix =
+		    (last_sep != string::npos && uri.length() > last_sep + 1)
+		        ? uri.substr(std::max<idx_t>(last_sep + 1, uri.length() > 15 ? uri.length() - 15 : 0))
+		        : (uri.length() > 15 ? uri.substr(uri.length() - 15) : uri);
 
 		// Format: disk_cache_dir/XXX/YY/fileid_offset_size_last15chars
 		std::ostringstream path;
-		path << disk_cache_dir
-		     << std::setfill('0') << std::setw(3) << std::hex << xxx << path_sep
-		     << std::setfill('0') << std::setw(2) << std::hex << yy << path_sep
-		     << std::dec << file_id << "_" << range_start << "_" << range_size << "_" << filename_suffix;
+		path << disk_cache_dir << std::setfill('0') << std::setw(3) << std::hex << xxx << path_sep << std::setfill('0')
+		     << std::setw(2) << std::hex << yy << path_sep << std::dec << file_id << "_" << range_start << "_"
+		     << range_size << "_" << filename_suffix;
 		return path.str();
 	}
 
