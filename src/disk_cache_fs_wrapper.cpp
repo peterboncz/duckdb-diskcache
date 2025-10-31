@@ -25,8 +25,7 @@ unique_ptr<FileHandle> DiskCacheFileSystemWrapper::OpenFileExtended(const OpenFi
 	if (!lakecache_file) {
 		return wrapped_handle; // don't cache, return a normal handle
 	}
-	auto key = cache->GenCacheKey(info.path);
-	return make_uniq<DiskCacheFileHandle>(*this, info.path, std::move(wrapped_handle), key, cache);
+	return make_uniq<DiskCacheFileHandle>(*this, info.path, std::move(wrapped_handle), cache);
 }
 
 static idx_t ReadChunk(duckdb::FileSystem &wrapped_fs, DiskCacheFileHandle &handle, char *buf, idx_t location,
@@ -34,7 +33,7 @@ static idx_t ReadChunk(duckdb::FileSystem &wrapped_fs, DiskCacheFileHandle &hand
 	// NOTE: ReadFromCache() can return cached_bytes == 0 but adjust max_nr_bytes downwards to align with a cached range
 	handle.cache->LogDebug("ReadChunk(path=" + handle.uri + ", location=" + to_string(location) +
 	                       ", max_nr_bytes=" + to_string(len) + ")");
-	idx_t nr_cached = handle.cache->ReadFromCache(handle.key, handle.uri, location, len, buf);
+	idx_t nr_cached = handle.cache->ReadFromCache(handle.uri, location, len, buf);
 #if 0
     if (nr_cached > 0) { // debug
 		char *tmp_buf = new char[nr_cached];
@@ -53,7 +52,7 @@ static idx_t ReadChunk(duckdb::FileSystem &wrapped_fs, DiskCacheFileHandle &hand
 		wrapped_fs.Seek(*handle.wrapped_handle, location + nr_cached);
 		nr_read = wrapped_fs.Read(*handle.wrapped_handle, buf + nr_cached, nr_read);
 
-		handle.cache->InsertCache(handle.key, handle.uri, location + nr_cached, nr_read, buf + nr_cached);
+		handle.cache->InsertCache(handle.uri, location + nr_cached, nr_read, buf + nr_cached);
 
 		if (nr_read && DiskCacheFileSystemWrapper::IsFakeS3(handle.uri)) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(EstimateS3(nr_read))); // simulate S3 latency
@@ -93,7 +92,7 @@ void DiskCacheFileSystemWrapper::Write(FileHandle &handle, void *buf, int64_t nr
 	wrapped_fs->Write(*blob_handle.wrapped_handle, buf, nr_bytes, location);
 	blob_handle.file_position = location + nr_bytes;
 	if (blob_handle.cache && cache->disk_cache_initialized) { // Cache the written data
-		blob_handle.cache->InsertCache(blob_handle.key, blob_handle.uri, location, nr_bytes, buf);
+		blob_handle.cache->InsertCache(blob_handle.uri, location, nr_bytes, buf);
 	}
 }
 
@@ -104,7 +103,7 @@ int64_t DiskCacheFileSystemWrapper::Write(FileHandle &handle, void *buf, int64_t
 	if (nr_bytes > 0) {
 		blob_handle.file_position += nr_bytes;
 		if (blob_handle.cache && cache->disk_cache_initialized) { // Cache the written data
-			blob_handle.cache->InsertCache(blob_handle.key, blob_handle.uri, write_location, nr_bytes, buf);
+			blob_handle.cache->InsertCache(blob_handle.uri, write_location, nr_bytes, buf);
 		}
 	}
 	return nr_bytes;

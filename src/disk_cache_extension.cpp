@@ -256,7 +256,6 @@ static void DiskCacheStatsFunction(ClientContext &context, TableFunctionInput &d
 
 struct HydrateRange {
 	string uri;
-	string key;
 	idx_t start, end;    // range
 	idx_t original_size; // Sum of original range sizes
 };
@@ -314,7 +313,6 @@ static void DiskCacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 	// Helper lambda to schedule a range
 	auto schedule_range = [&cache](const HydrateRange &range) {
 		DiskCacheReadJob job;
-		job.key = range.key;
 		job.uri = range.uri;
 		job.range_start = range.start;
 		job.range_size = range.end - range.start;
@@ -360,7 +358,6 @@ static void DiskCacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 
 		// Start new range
 		temp_range.uri = uri;
-		temp_range.key = cache->GenCacheKey(uri);
 		temp_range.start = range_start;
 		temp_range.end = range_start + range_size;
 		temp_range.original_size = range_size;

@@ -73,13 +73,13 @@ struct DiskCacheRangeInfo {
 
 // DiskCacheWriteJob - async write job for disk persistence
 struct DiskCacheWriteJob {
-	string uri, key;                   // For error handling and cache invalidation
+	string uri;                        // For error handling and cache invalidation
 	shared_ptr<WriteBuffer> write_buf; // Shared write buffer
 };
 
 // DiskCacheReadJob - async read job for prefetching
 struct DiskCacheReadJob {
-	string uri, key;   // Cache uri and derived key of the blob that gets cached
+	string uri;        // Cache uri of the blob that gets cached
 	idx_t range_start; // Start position in file
 	idx_t range_size;  // Bytes to read
 };
@@ -152,29 +152,29 @@ struct DiskCache {
 		}
 	}
 
-	// Cache key and file path generation
-	string GenCacheKey(const string &uri) const {
-		const idx_t len = uri.length();
-		const idx_t suffix = (len > URI_SUFFIX_LEN) ? len - URI_SUFFIX_LEN : 0;
-		const idx_t slash = uri.find_last_of(path_sep);
-		const idx_t protocol = uri.find("://");
-		hash_t hash_value = Hash(string_t(uri.c_str(), static_cast<uint32_t>(len)));
-		std::stringstream hex_stream;
-		hex_stream << std::hex << std::uppercase << std::setfill('0') << std::setw(16) << hash_value;
-		return hex_stream.str() + "_" + uri.substr(std::max<idx_t>((slash != string::npos) * (slash + 1), suffix)) +
-		       "_" + ((protocol != string::npos) ? StringUtil::Lower(uri.substr(0, protocol)) : "unknown");
-	}
+	// File path generation
+	string GenCacheFilePath(idx_t file_id, const string &uri, idx_t range_start, idx_t range_size) const {
+		// Derive XXX/YY directory structure from file_id (1M combinations: 4096 * 256)
+		idx_t xxx = (file_id / 256) % 4096;
+		idx_t yy = file_id % 256;
 
-	string GenCacheFilePath(idx_t file_id, const string &key, idx_t range_start = 0) const {
-		std::ostringstream oss;
-		string xxx = key.substr(0, 3);
-		string yy = key.substr(3, 2);
-		oss << range_start << "_" << file_id;
-		return disk_cache_dir + xxx + path_sep + yy + path_sep + key.substr(5, 11) + oss.str() + key.substr(16);
+		// Extract last 15 characters of URI filename (after last separator)
+		idx_t last_sep = uri.find_last_of(path_sep);
+		string filename_suffix = (last_sep != string::npos && uri.length() > last_sep + 1)
+			? uri.substr(std::max<idx_t>(last_sep + 1, uri.length() > 15 ? uri.length() - 15 : 0))
+			: (uri.length() > 15 ? uri.substr(uri.length() - 15) : uri);
+
+		// Format: disk_cache_dir/XXX/YY/fileid_offset_size_last15chars
+		std::ostringstream path;
+		path << disk_cache_dir
+		     << std::setfill('0') << std::setw(3) << std::hex << xxx << path_sep
+		     << std::setfill('0') << std::setw(2) << std::hex << yy << path_sep
+		     << std::dec << file_id << "_" << range_start << "_" << range_size << "_" << filename_suffix;
+		return path.str();
 	}
 
 	// Directory management
-	void EnsureDirectoryExists(const string &key);
+	void EnsureDirectoryExists(idx_t file_id);
 	bool CleanCacheDir();
 	bool InitCacheDir();
 
@@ -202,26 +202,26 @@ struct DiskCache {
 		memcache_size = 0;
 	}
 
-	DiskCacheEntry *FindEntry(const string &key, const string &uri) {
-		auto it = key_cache->find(key);
-		return (it != key_cache->end() && it->second->uri == uri) ? it->second.get() : nullptr;
+	DiskCacheEntry *FindEntry(const string &uri) {
+		auto map_key = StringUtil::Lower(uri);
+		auto it = key_cache->find(map_key);
+		return (it != key_cache->end()) ? it->second.get() : nullptr;
 	}
 
-	DiskCacheEntry *UpsertEntry(const string &key, const string &uri) {
-		DiskCacheEntry *cache_entry = nullptr;
-		auto it = key_cache->find(key);
+	DiskCacheEntry *UpsertEntry(const string &uri) {
+		auto map_key = StringUtil::Lower(uri);
+		auto it = key_cache->find(map_key);
 		if (it == key_cache->end()) {
 			auto new_entry = make_uniq<DiskCacheEntry>();
 			new_entry->uri = uri;
-			LogDebug("Insert key '" + key + "'");
-			cache_entry = new_entry.get();
-			(*key_cache)[key] = std::move(new_entry);
-		} else if (it->second->uri == uri) {
-			cache_entry = it->second.get();
+			LogDebug("Insert URI '" + uri + "'");
+			auto *cache_entry = new_entry.get();
+			(*key_cache)[map_key] = std::move(new_entry);
+			return cache_entry;
 		}
-		return cache_entry;
+		return it->second.get();
 	}
-	void EvictEntry(const string &uri, const string &key);
+	void EvictEntry(const string &uri);
 	void EvictRange(DiskCacheFileRange *range) {
 		auto buf = range->write_buf->buf;
 		if (buf) {
@@ -285,8 +285,8 @@ struct DiskCache {
 	void StopIOThreads();
 
 	// Core cache operations
-	void InsertCache(const string &key, const string &uri, idx_t pos, idx_t len, void *buf);
-	idx_t ReadFromCache(const string &key, const string &uri, idx_t pos, idx_t &len, void *buf);
+	void InsertCache(const string &uri, idx_t pos, idx_t len, void *buf);
+	idx_t ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *buf);
 
 	// Configuration and caching policy
 	void ConfigureCache(idx_t max_size_bytes, const string &directory, idx_t writer_threads);

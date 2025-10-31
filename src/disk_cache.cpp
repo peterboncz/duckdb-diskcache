@@ -4,8 +4,8 @@
 
 namespace duckdb {
 
-DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &key, const string &uri, idx_t pos, idx_t &len) {
-	DiskCacheEntry *disk_cache_entry = cache.FindEntry(key, uri);
+DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &uri, idx_t pos, idx_t &len) {
+	DiskCacheEntry *disk_cache_entry = cache.FindEntry(uri);
 	if (!disk_cache_entry || disk_cache_entry->ranges.empty()) {
 		return nullptr;
 	}
@@ -27,12 +27,12 @@ DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &key, const stri
 	return hit_range;
 }
 
-idx_t DiskCache::ReadFromCache(const string &key, const string &uri, idx_t pos, idx_t &len, void *buf) {
+idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *buf) {
 	DiskCacheFileRange *hit_range = nullptr;
 	idx_t orig_len = len, off = pos, hit_size = 0;
 
 	std::unique_lock<std::mutex> lock(disk_cache_mutex);
-	hit_range = AnalyzeRange(*this, key, uri, off, len); // may adjust len downward to match a next cached range
+	hit_range = AnalyzeRange(*this, uri, off, len); // may adjust len downward to match a next cached range
 	if (hit_range) {
 		hit_size = std::min(orig_len, hit_range->uri_range_end - pos);
 	}
@@ -73,7 +73,7 @@ idx_t DiskCache::ReadFromCache(const string &key, const string &uri, idx_t pos, 
 	}
 	if (bytes_from_mem > 0) { // Update bytes_from_mem counter if we had a memory hit
 		lock.lock();
-		auto disk_cache_entry = FindEntry(key, uri);
+		auto disk_cache_entry = FindEntry(uri);
 		if (disk_cache_entry) {
 			auto range_it = disk_cache_entry->ranges.find(uri_range_start);
 			if (range_it != disk_cache_entry->ranges.end()) {
@@ -86,17 +86,17 @@ idx_t DiskCache::ReadFromCache(const string &key, const string &uri, idx_t pos, 
 }
 
 // we had to read from the original source (e.g. S3). Now try to cache this buffer in the disk-based disk_cache
-void DiskCache::InsertCache(const string &key, const string &uri, idx_t pos, idx_t len, void *buf) {
+void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) {
 	if (!disk_cache_initialized || len == 0 || len > total_cache_capacity) {
 		return; // bail out if non initialized or impossible length
 	}
 	std::lock_guard<std::mutex> lock(regex_mutex);
-	auto cache_entry = UpsertEntry(key, uri);
+	auto cache_entry = UpsertEntry(uri);
 	if (!cache_entry) {
-		return; // name collision (rare)
+		return; // collision (rare)
 	}
 	// Check (under lock) if range already cached (in the meantime, due to concurrent reads)
-	auto hit_range = AnalyzeRange(*this, key, uri, pos, len);
+	auto hit_range = AnalyzeRange(*this, uri, pos, len);
 	idx_t offset = 0, final_size = 0, range_start = pos, range_end = range_start + len;
 	if (hit_range) { // another thread cached the same range in the meantime
 		offset = hit_range->uri_range_end - range_start;
@@ -121,7 +121,7 @@ void DiskCache::InsertCache(const string &key, const string &uri, idx_t pos, idx
 
 	// Generate file path and store it in the write buffer
 	idx_t file_id = ++current_file_id;
-	write_buffer->file_path = GenCacheFilePath(file_id, key);
+	write_buffer->file_path = GenCacheFilePath(file_id, uri, range_start, final_size);
 
 	// Create a new DiskCacheFileRange with unique ownership
 	auto new_range = make_uniq<DiskCacheFileRange>(range_start, range_end, write_buffer);
@@ -137,7 +137,6 @@ void DiskCache::InsertCache(const string &key, const string &uri, idx_t pos, idx
 	DiskCacheWriteJob job;
 	job.write_buf = write_buffer;
 	job.uri = uri;
-	job.key = key;
 	QueueIOWrite(job, file_id % nr_io_threads); // Partition based on file_id
 }
 
@@ -253,7 +252,19 @@ void DiskCache::StopIOThreads() {
 }
 
 void DiskCache::ProcessWriteJob(DiskCacheWriteJob &job) {
-	EnsureDirectoryExists(job.key);            // first ensure there is directory to write the file into
+	// Extract file_id from file_path to create directory
+	// Path format: disk_cache_dir/XXX/YY/file_id_offset_size_suffix
+	idx_t last_sep = job.write_buf->file_path.find_last_of(path_sep);
+	idx_t file_id = 0;
+	if (last_sep != string::npos) {
+		string filename = job.write_buf->file_path.substr(last_sep + 1);
+		idx_t first_underscore = filename.find('_');
+		if (first_underscore != string::npos) {
+			file_id = std::stoull(filename.substr(0, first_underscore));
+		}
+	}
+
+	EnsureDirectoryExists(file_id);            // first ensure there is directory to write the file into
 	if (job.write_buf->nr_bytes == CANCELED) { // Check if write was canceled before we started
 		LogDebug("ProcessWriteJob: write was canceled before starting, skipping");
 		return;
@@ -271,7 +282,7 @@ void DiskCache::ProcessWriteJob(DiskCacheWriteJob &job) {
 		LogDebug("ProcessWriteJob: write was canceled, deleting partial file");
 	} else {
 		LogError("ProcessWriteJob: write failed for '" + job.write_buf->file_path + "', evicting entire cache entry");
-		EvictEntry(job.uri, job.key); // evict the entire cache entry (ok, a bit nuclear, but should not happen often)
+		EvictEntry(job.uri); // evict the entire cache entry (ok, a bit nuclear, but should not happen often)
 	}
 }
 
@@ -286,7 +297,7 @@ void DiskCache::ProcessReadJob(DiskCacheReadJob &job) {
 		fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
 
 		// Insert into cache (this will queue a write job)
-		InsertCache(job.key, job.uri, job.range_start, job.range_size, buffer.get());
+		InsertCache(job.uri, job.range_start, job.range_size, buffer.get());
 	} catch (const std::exception &e) {
 		LogError("ProcessReadJob: failed to read '" + job.uri + "' at " + to_string(job.range_start) + ": " +
 		         string(e.what()));
@@ -325,14 +336,15 @@ void DiskCache::MainIOThreadLoop(idx_t thread_id) {
 //===----------------------------------------------------------------------===//
 // DiskCache - evict a complete file (i.e. it entry and all its ranges)
 //===----------------------------------------------------------------------===//
-void DiskCache::EvictEntry(const string &uri, const string &key) {
+void DiskCache::EvictEntry(const string &uri) {
 	if (!disk_cache_initialized) {
 		return;
 	}
 	std::lock_guard<std::mutex> lock(disk_cache_mutex);
-	auto it = key_cache->find(key);
-	if (it == key_cache->end() || it->second->uri != uri) {
-		return; // Not found or URI collision
+	auto map_key = StringUtil::Lower(uri);
+	auto it = key_cache->find(map_key);
+	if (it == key_cache->end()) {
+		return; // Not found
 	}
 	// Iterate through all ranges and evict them
 	auto &cache_entry = it->second;
@@ -528,9 +540,10 @@ bool DiskCache::DeleteCacheFile(const string &file) {
 //===----------------------------------------------------------------------===//
 // Directory management
 //===----------------------------------------------------------------------===//
-void DiskCache::EnsureDirectoryExists(const string &key) {
-	idx_t xxx = std::stoi(key.substr(0, 3), nullptr, 16);
-	idx_t yy = std::stoi(key.substr(3, 2), nullptr, 16);
+void DiskCache::EnsureDirectoryExists(idx_t file_id) {
+	// Derive directory structure from file_id (1M combinations: 4096 * 256)
+	idx_t xxx = (file_id / 256) % 4096;
+	idx_t yy = file_id % 256;
 	idx_t idx = 4096 + xxx * 256 + yy; // Always use XXX/YY structure
 
 	if (subdir_created.test(idx)) { // quick test before lock
@@ -540,19 +553,26 @@ void DiskCache::EnsureDirectoryExists(const string &key) {
 	if (subdir_created.test(idx)) { // avoid race: some thread may just have created it
 		return;
 	}
-	auto dir = disk_cache_dir + key.substr(0, 3);
+
+	// Format directory names as 3-digit and 2-digit hex
+	std::ostringstream xxx_stream, yy_stream;
+	xxx_stream << std::setfill('0') << std::setw(3) << std::hex << xxx;
+	yy_stream << std::setfill('0') << std::setw(2) << std::hex << yy;
+
+	auto dir = disk_cache_dir + xxx_stream.str();
 	try {
 		auto &fs = FileSystem::GetFileSystem(*db_instance);
 		if (!fs.DirectoryExists(dir)) {
 			fs.CreateDirectory(dir);
 		}
-		dir += path_sep + key.substr(3, 2);
+		dir += path_sep + yy_stream.str();
 		if (!fs.DirectoryExists(dir)) {
 			fs.CreateDirectory(dir);
 		}
 		subdir_created.set(idx);
 	} catch (const std::exception &e) {
-		LogError("EnsureDirectoryExists: failed to mkdir " + dir + " for key '" + key + "': " + string(e.what()));
+		LogError("EnsureDirectoryExists: failed to mkdir " + dir + " for file_id " + std::to_string(file_id) + ": " +
+		         string(e.what()));
 	}
 }
 

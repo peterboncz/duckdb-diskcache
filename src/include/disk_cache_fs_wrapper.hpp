@@ -36,10 +36,10 @@ public:
 //===----------------------------------------------------------------------===//
 class DiskCacheFileHandle : public FileHandle {
 public:
-	DiskCacheFileHandle(FileSystem &fs, string original_path, unique_ptr<FileHandle> wrapped_handle, string key,
+	DiskCacheFileHandle(FileSystem &fs, string original_path, unique_ptr<FileHandle> wrapped_handle,
 	                    shared_ptr<DiskCache> cache)
 	    : FileHandle(fs, wrapped_handle->GetPath(), wrapped_handle->GetFlags()),
-	      wrapped_handle(std::move(wrapped_handle)), cache(cache), uri(std::move(original_path)), key(std::move(key)),
+	      wrapped_handle(std::move(wrapped_handle)), cache(cache), uri(std::move(original_path)),
 	      file_position(0) {
 	}
 	~DiskCacheFileHandle() override = default;
@@ -52,7 +52,7 @@ public:
 public:
 	unique_ptr<FileHandle> wrapped_handle;
 	shared_ptr<DiskCache> cache;
-	string uri, key;     // original uri, and hashmap key derived from it
+	string uri;          // original uri
 	idx_t file_position; // Track our own file position
 };
 
@@ -93,20 +93,20 @@ public:
 	// write operations should invalidate the cache
 	void MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener) override {
 		if (cache) {
-			cache->EvictEntry(source, cache->GenCacheKey(source));
-			cache->EvictEntry(target, cache->GenCacheKey(target));
+			cache->EvictEntry(source);
+			cache->EvictEntry(target);
 		}
 		wrapped_fs->MoveFile(source, target, opener);
 	}
 	void RemoveFile(const string &uri, optional_ptr<FileOpener> opener) override {
 		if (cache) {
-			cache->EvictEntry(uri, cache->GenCacheKey(uri));
+			cache->EvictEntry(uri);
 		}
 		wrapped_fs->RemoveFile(uri, opener);
 	}
 	bool TryRemoveFile(const string &uri, optional_ptr<FileOpener> opener = nullptr) override {
 		if (cache) {
-			cache->EvictEntry(uri, cache->GenCacheKey(uri));
+			cache->EvictEntry(uri);
 		}
 		return wrapped_fs->TryRemoveFile(uri, opener);
 	}
@@ -114,14 +114,14 @@ public:
 	void Truncate(FileHandle &handle, int64_t new_size) override {
 		auto &blob_handle = handle.Cast<DiskCacheFileHandle>();
 		if (blob_handle.cache) {
-			blob_handle.cache->EvictEntry(blob_handle.uri, blob_handle.key);
+			blob_handle.cache->EvictEntry(blob_handle.uri);
 		}
 		wrapped_fs->Truncate(*blob_handle.wrapped_handle, new_size);
 	}
 	bool Trim(FileHandle &handle, idx_t offset_bytes, idx_t length_bytes) override {
 		auto &blob_handle = handle.Cast<DiskCacheFileHandle>();
 		if (cache) {
-			cache->EvictEntry(blob_handle.uri, blob_handle.key);
+			cache->EvictEntry(blob_handle.uri);
 		}
 		return wrapped_fs->Trim(*blob_handle.wrapped_handle, offset_bytes, length_bytes);
 	}
