@@ -192,9 +192,11 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 			                 bind_data.directory.c_str(), bind_data.max_size_mb, bind_data.nr_io_threads,
 			                 bind_data.regex_patterns.c_str());
 
-			// Configure cache first (including small_range_threshold)
-			shared_cache->ConfigureCache(bind_data.max_size_mb * 1024 * 1024, bind_data.directory,
-			                             bind_data.nr_io_threads);
+			// Configure cache - normalize directory to have trailing separator
+			auto dir =
+			    bind_data.directory +
+			    (StringUtil::EndsWith(bind_data.directory, shared_cache->path_sep) ? "" : shared_cache->path_sep);
+			shared_cache->ConfigureCache(bind_data.max_size_mb * 1024 * 1024, dir, bind_data.nr_io_threads);
 
 			// Update regex patterns and purge non-qualifying cache entries
 			shared_cache->UpdateRegexPatterns(bind_data.regex_patterns);
@@ -424,7 +426,7 @@ void DiskCacheExtension::Load(ExtensionLoader &loader) {
 	default_cache_sizes(instance, max_size_mb, nr_io_threads);
 	auto shared_cache = GetOrCreateDiskCache(instance);
 	shared_cache->path_sep = instance.GetFileSystem().PathSeparator("");
-	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, ".disk_cache", nr_io_threads);
+	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, ".disk_cache" + shared_cache->path_sep, nr_io_threads);
 
 	// Register extension callback for automatic wrapping
 	config.extension_callbacks.push_back(make_uniq<DiskCacheExtensionCallback>());

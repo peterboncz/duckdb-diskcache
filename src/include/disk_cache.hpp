@@ -74,6 +74,7 @@ struct DiskCacheRangeInfo {
 struct DiskCacheWriteJob {
 	string uri;                        // For error handling and cache invalidation
 	shared_ptr<WriteBuffer> write_buf; // Shared write buffer
+	idx_t file_id;                     // File ID for directory creation
 };
 
 // DiskCacheReadJob - async read job for prefetching

@@ -135,6 +135,7 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	DiskCacheWriteJob job;
 	job.write_buf = write_buffer;
 	job.uri = uri;
+	job.file_id = file_id;
 	QueueIOWrite(job, file_id % nr_io_threads); // Partition based on file_id
 }
 
@@ -250,19 +251,7 @@ void DiskCache::StopIOThreads() {
 }
 
 void DiskCache::ProcessWriteJob(DiskCacheWriteJob &job) {
-	// Extract file_id from file_path to create directory
-	// Path format: disk_cache_dir/XXX/YY/file_id_offset_size_suffix
-	idx_t last_sep = job.write_buf->file_path.find_last_of(path_sep);
-	idx_t file_id = 0;
-	if (last_sep != string::npos) {
-		string filename = job.write_buf->file_path.substr(last_sep + 1);
-		idx_t first_underscore = filename.find('_');
-		if (first_underscore != string::npos) {
-			file_id = std::stoull(filename.substr(0, first_underscore));
-		}
-	}
-
-	EnsureDirectoryExists(file_id);            // first ensure there is directory to write the file into
+	EnsureDirectoryExists(job.file_id);        // first ensure there is directory to write the file into
 	if (job.write_buf->nr_bytes == CANCELED) { // Check if write was canceled before we started
 		LogDebug("ProcessWriteJob: write was canceled before starting, skipping");
 		return;
@@ -574,10 +563,8 @@ void DiskCache::EnsureDirectoryExists(idx_t file_id) {
 
 void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx_t max_io_threads) {
 	std::lock_guard<std::mutex> lock(disk_cache_mutex);
-	auto directory = base_dir + (StringUtil::EndsWith(base_dir, path_sep) ? "" : path_sep);
 	if (!disk_cache_initialized) {
-		// Release lock before calling InitializeCache to avoid deadlock
-		disk_cache_dir = directory;
+		disk_cache_dir = base_dir;
 		total_cache_capacity = max_size_bytes;
 
 		LogDebug("ConfigureCache: initializing cache: directory='" + disk_cache_dir + "' max_size=" +
@@ -595,7 +582,7 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 	}
 	// Cache already initialized, check what needs to be changed
 	bool need_restart_threads = (nr_io_threads != max_io_threads);
-	bool directory_changed = (disk_cache_dir != directory);
+	bool directory_changed = (disk_cache_dir != base_dir);
 	bool size_reduced = (max_size_bytes < total_cache_capacity);
 	bool size_changed = (total_cache_capacity != max_size_bytes);
 	if (!directory_changed && !need_restart_threads && !size_changed) {
@@ -604,23 +591,21 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 	}
 
 	// Stop existing threads if we need to change thread count or directory
-	LogDebug("ConfigureCache: old_dir='" + disk_cache_dir + "' new_dir='" + directory +
+	LogDebug("ConfigureCache: old_dir='" + disk_cache_dir + "' new_dir='" + base_dir +
 	         "' old_size=" + std::to_string(total_cache_capacity) + " new_size=" + std::to_string(max_size_bytes) +
 	         " old_threads=" + std::to_string(nr_io_threads) + " new_threads=" + std::to_string(max_io_threads));
 	if (nr_io_threads > 0 && (need_restart_threads || directory_changed)) {
 		LogDebug("ConfigureCache: stopping existing cache IO threads for restateuration");
 		StopIOThreads();
 	}
-	// Clear existing cache only if directory changed or threshold changed
+	// Clear existing cache only if directory changed
 	if (directory_changed) {
-		LogDebug("ConfigureCache: directory or threshold changed, clearing cache");
+		LogDebug("ConfigureCache: directory changed, clearing cache");
 		Clear();
-		if (directory_changed) {
-			if (!CleanCacheDir()) { // Clean old directory before switching
-				LogError("ConfigureCache: cleaning cache directory='" + disk_cache_dir + "' failed");
-			}
+		if (!CleanCacheDir()) { // Clean old directory before switching
+			LogError("ConfigureCache: cleaning cache directory='" + disk_cache_dir + "' failed");
 		}
-		disk_cache_dir = directory;
+		disk_cache_dir = base_dir;
 		if (!InitCacheDir()) {
 			LogError("ConfigureCache: initializing cache directory='" + disk_cache_dir + "' failed");
 		}
