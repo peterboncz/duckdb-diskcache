@@ -410,13 +410,7 @@ vector<DiskCacheRangeInfo> DiskCache::GetStatistics() const { // produce list of
 	for (const auto &cache_pair : *key_cache) {
 		const auto &cache_entry = cache_pair.second;
 		DiskCacheRangeInfo info;
-		info.protocol = "unknown";
-		info.uri = cache_entry->uri;
-		auto pos = info.uri.find("://");
-		if (pos != string::npos) {
-			info.protocol = info.uri.substr(0, pos);
-			info.uri = info.uri.substr(pos + 3, info.uri.length() - (pos + 3));
-		}
+		info.uri = cache_entry->uri; // Keep full URI with protocol intact
 		for (const auto &range_pair : cache_entry->ranges) {
 			info.file = range_pair.second->write_buf->file_path;
 			info.range_start_uri = range_pair.second->uri_range_start;

@@ -114,7 +114,7 @@ select message from duckdb_logs where log_level = 'ERROR';
 
 statement ok
 create or replace table hydrate as
-(select concat(protocol, '://', uri) as uri, range_start_uri, range_size from disk_cache_stats() order by all);
+(select uri, range_start_uri, range_size from disk_cache_stats() order by all);
 
 statement ok
 from disk_cache_config(1024, '.disk_cache3/', 192);

@@ -61,8 +61,7 @@ struct DiskCacheEntry {
 
 // Statistics structure
 struct DiskCacheRangeInfo {
-	string protocol;        // e.g., s3
-	string uri;             // Blob that we have cached a range of
+	string uri;             // Full URI including protocol (e.g., s3://bucket/path)
 	string file;            // Disk file where this range is stored in the cache
 	idx_t range_start_uri;  // Start position in blob of this range
 	idx_t range_size;       // Size of range (end - start in remote file)

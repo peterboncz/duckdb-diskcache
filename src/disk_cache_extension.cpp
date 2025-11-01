@@ -138,9 +138,8 @@ static unique_ptr<GlobalTableFunctionState> DiskCacheStatsInitGlobal(ClientConte
 // Bind function for disk_cache_stats
 static unique_ptr<FunctionData> DiskCacheStatsBind(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
-	// Setup return schema - returns cache statistics with 8 columns
-	return_types.push_back(LogicalType::VARCHAR); // protocol
-	return_types.push_back(LogicalType::VARCHAR); // uri
+	// Setup return schema - returns cache statistics with 7 columns
+	return_types.push_back(LogicalType::VARCHAR); // uri (with protocol)
 	return_types.push_back(LogicalType::VARCHAR); // file
 	return_types.push_back(LogicalType::BIGINT);  // range_start_uri
 	return_types.push_back(LogicalType::BIGINT);  // range_size
@@ -148,7 +147,6 @@ static unique_ptr<FunctionData> DiskCacheStatsBind(ClientContext &context, Table
 	return_types.push_back(LogicalType::BIGINT);  // bytes_from_cache
 	return_types.push_back(LogicalType::BIGINT);  // bytes_from_mem
 
-	names.push_back("protocol");
 	names.push_back("uri");
 	names.push_back("file");
 	names.push_back("range_start_uri");
@@ -238,14 +236,13 @@ static void DiskCacheStatsFunction(ClientContext &context, TableFunctionInput &d
 
 	for (idx_t i = 0; i < chunk_size; i++) {
 		const auto &info = stats[offset + i];
-		output.data[0].SetValue(i, Value(info.protocol));
-		output.data[1].SetValue(i, Value(info.uri));
-		output.data[2].SetValue(i, Value(info.file));
-		output.data[3].SetValue(i, Value::BIGINT(info.range_start_uri));
-		output.data[4].SetValue(i, Value::BIGINT(info.range_size));
-		output.data[5].SetValue(i, Value::BIGINT(info.usage_count));
-		output.data[6].SetValue(i, Value::BIGINT(info.bytes_from_cache));
-		output.data[7].SetValue(i, Value::BIGINT(info.bytes_from_mem));
+		output.data[0].SetValue(i, Value(info.uri));
+		output.data[1].SetValue(i, Value(info.file));
+		output.data[2].SetValue(i, Value::BIGINT(info.range_start_uri));
+		output.data[3].SetValue(i, Value::BIGINT(info.range_size));
+		output.data[4].SetValue(i, Value::BIGINT(info.usage_count));
+		output.data[5].SetValue(i, Value::BIGINT(info.bytes_from_cache));
+		output.data[6].SetValue(i, Value::BIGINT(info.bytes_from_mem));
 	}
 	global_state.tuples_processed += chunk_size;
 }
