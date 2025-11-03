@@ -17,8 +17,7 @@
 #include <atomic>
 
 // inspired on AnyBlob paper: lowest latency is 20ms, transfer 12MB/s for the first MB, increasing to 40MB/s until 8MB
-#define EstimateS3(bytes)                                                                                              \
-	(20 + ((((bytes < (1 << 20)) ? 80 : (bytes < (1 << 23)) ? (960 / ((bytes >> 18) + 8)) : 24) * bytes) >> 20))
+#define EstimateS3(n) (20 + ((((n < (1 << 20)) ? 80 : (n < (1 << 23)) ? (960 / ((n >> 18) + 8)) : 24) * n) >> 20))
 
 namespace duckdb {
 
@@ -30,7 +29,7 @@ constexpr idx_t CANCELED = static_cast<idx_t>(-1);
 
 // WriteBuffer - shared buffer for async writes
 struct WriteBuffer {
-	std::shared_ptr<char> buf; // Shared pointer to buffer data (with array deleter)
+	std::shared_ptr<char> buf; // Shared pointer to data buffer. Gets set nullptr once write to file_path completes
 	size_t nr_bytes;           // Size to write, or WRITE_CANCELED if canceled
 	string file_path;          // Cache file path
 
@@ -40,11 +39,10 @@ struct WriteBuffer {
 
 //===----------------------------------------------------------------------===//
 // DiskCacheFileRange - represents a cached range with its own disk file
-// Each range gets its own file, eliminating the need for DiskCacheFile
 //===----------------------------------------------------------------------===//
 struct DiskCacheFileRange {
 	idx_t uri_range_start, uri_range_end;                            // Range in remote blob file (uri)
-	shared_ptr<WriteBuffer> write_buf;                               // Shared write buffer, nullptr when write complete
+	shared_ptr<WriteBuffer> write_buf;                               // write buffer shared with IO write queue
 	idx_t usage_count = 0, bytes_from_cache = 0, bytes_from_mem = 0; // stats
 	DiskCacheFileRange *lru_prev = nullptr, *lru_next = nullptr;     // LRU doubly-linked list
 
@@ -54,9 +52,8 @@ struct DiskCacheFileRange {
 };
 
 struct DiskCacheEntry {
-	string uri; // full URL of the blob
-	// Map of start position to DiskCacheFileRanges (unique ownership)
-	map<idx_t, unique_ptr<DiskCacheFileRange>> ranges;
+	string uri;                                        // full URL of the blob
+	map<idx_t, unique_ptr<DiskCacheFileRange>> ranges; // Map of start position to DiskCacheFileRanges
 };
 
 // Statistics structure
@@ -70,14 +67,14 @@ struct DiskCacheRangeInfo {
 	idx_t bytes_from_mem;   // memory bytes read from this cached range
 };
 
-// DiskCacheWriteJob - async write job for disk persistence
+// DiskCacheWriteJob - async write job for writing to cache without delaying reads
 struct DiskCacheWriteJob {
 	string uri;                        // For error handling and cache invalidation
 	shared_ptr<WriteBuffer> write_buf; // Shared write buffer
 	idx_t file_id;                     // File ID for directory creation
 };
 
-// DiskCacheReadJob - async read job for prefetching
+// DiskCacheReadJob - async read job for prefetching (used during fast cache hydration)
 struct DiskCacheReadJob {
 	string uri;        // Cache uri of the blob that gets cached
 	idx_t range_start; // Start position in file
@@ -85,7 +82,7 @@ struct DiskCacheReadJob {
 };
 
 //===----------------------------------------------------------------------===//
-// DiskCache - Main cache implementation (merged DiskCacheState + DiskCacheMap + DiskCache)
+// DiskCache - Main cache implementation
 //===----------------------------------------------------------------------===//
 
 struct DiskCache {
