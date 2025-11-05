@@ -45,7 +45,7 @@ idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 	// it may have reduced the following non-cached read until 'len' to a next cached range
 	idx_t offset = pos - hit_range->range_start; // offset in hit_range that we will read
 	hit_range->usage_count++;
-	hit_range->bytes_from_mem += hit_size;
+	hit_range->bytes_from_cache += hit_size;
 	TouchLRU(hit_range); // Update LRU position
 
 	// Check if we can read from WriteBuffer (write in progress or completed)
