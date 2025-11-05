@@ -43,24 +43,18 @@ idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 
 	// the read we want to do at 'pos' finds a hit of its 'hit_size' first bytes in 'hit_range'
 	// it may have reduced the following non-cached read until 'len' to a next cached range
+	idx_t offset = pos - hit_range->range_start; // offset in hit_range that we will read
 	hit_range->usage_count++;
+	hit_range->bytes_from_mem += hit_size;
 	TouchLRU(hit_range); // Update LRU position
 
 	// Check if we can read from WriteBuffer (write in progress or completed)
-	shared_ptr<WriteBuffer> write_buf = hit_range->write_buf;
-	idx_t offset = pos - hit_range->range_start;
-	if (write_buf) {
-		std::shared_ptr<char> buffer_data = write_buf->buf;
-		if (buffer_data) { // Write still in progress, read from memory buffer
-			memcpy(buf, buffer_data.get() + offset, hit_size);
-			hit_range->bytes_from_mem += hit_size;
-			lock.unlock();
-			return hit_size;
-		}
+	std::shared_ptr<char> buffer_data = hit_range->write_buf->buf;
+	if (buffer_data) { // we obtained the shared_ptr reference, can use it now safely
+		memcpy(buf, buffer_data.get() + offset, hit_size);
+		lock.unlock();
+		return hit_size;
 	}
-	// Write completed, read from disk cache file
-	hit_range->bytes_from_cache += hit_size;
-
 	// save the critical values before unlock (after unlock, hit_range* might get deallocated in a concurrent evict)
 	string file = hit_range->write_buf->file_path;
 	idx_t range_start = hit_range->range_start;
@@ -106,7 +100,7 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	if (final_size == 0) {
 		return; // nothing to cache
 	}
-	if (!EvictToCapacity(final_size)) { // make sure we have room for 'final_bytes' extra data
+	if (!EvictToCapacity(final_size)) { // make sure we have room for 'final_size' extra bytes
 		LogError("InsertCache: EvictToCapacity failed for " + to_string(final_size) +
 		         " bytes (current_cache_size=" + to_string(current_cache_size) + ")");
 		return; // failed to make room
