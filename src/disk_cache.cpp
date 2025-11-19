@@ -48,7 +48,7 @@ idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 	hit_range->bytes_from_cache += hit_size;
 	TouchLRU(hit_range); // Update LRU position
 
-	// Check if we can read from WriteBuffer (write in progress or completed)
+	// Check if we can read from WriteBuffer (write in progress or completed
 	std::shared_ptr<char> buffer_data = hit_range->write_buf->buf;
 	if (buffer_data) { // we obtained the shared_ptr reference, can use it now safely
 		memcpy(buf, buffer_data.get() + offset, hit_size);
@@ -651,12 +651,14 @@ void DiskCache::UpdateRegexPatterns(const string &regex_patterns_str) {
 }
 
 bool DiskCache::CacheUnsafely(const string &uri) const {
-	std::lock_guard<std::mutex> lock(regex_mutex);
-	if (!cached_regexps.empty()) { // empty is default!
-		// the regexps allow unsafe caching (without worrying about etags/modified times): blindly cache
-		for (const auto &compiled_pattern : cached_regexps) {
-			if (std::regex_search(uri, compiled_pattern)) {
-				return true;
+	if (!StringUtil::StartsWith(uri, disk_cache_dir)) { // never cache own files
+		std::lock_guard<std::mutex> lock(regex_mutex);
+		if (!cached_regexps.empty()) { // empty is default!
+			// the regexps allow unsafe caching (without worrying about etags/modified times): blindly cache
+			for (const auto &compiled_pattern : cached_regexps) {
+				if (std::regex_search(uri, compiled_pattern)) {
+					return true;
+				}
 			}
 		}
 	}

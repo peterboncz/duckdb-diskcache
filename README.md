@@ -2,7 +2,7 @@
 
 It works by intercepting reads and writes that go through httpfs (including http://, https://, s3://, hf://, r2://, and gcp:// access) as well as Azure and will write what you just accessed to a local cache file as well. Subsequent reads will be served from that. This also holds for data that you just wrote: it will also be cached in **DiskCache**.  By default, it will only cache files accessed by a *Data Lake*. 
 
-**DiskCache** will use by default a maximum size of 4GB * cores and as number of IO threads 12 * cores (with max 192).
+**DiskCache** will use by default a maximum size of 4GB * cores and as number of IO threads 12 * cores (with max 255).
 It works fine by default in conjunction with the ExternalFileCache which is on by default in DuckDB. **DiskCache** intercepts network reads and writes, but these will only occur if the ExternalFileCache misses. Therefore, very hot ranges that are firmly cached in RAM by ExternalDiskCache will never need a network read and therefore appear to be cold data to the **DiskCache**. We therefore also implemented RAM caching inside the **DiskCache** which gets used only if the ExternalFileCache is disabled by:
 ```sql
 SET enable_external_file_cache = false;

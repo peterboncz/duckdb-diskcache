@@ -69,6 +69,13 @@ public:
 		return StringUtil::Lower(path.substr(0, 8)) == "fake_s3:";
 	}
 
+private:
+	void EvictFile(const string &uri) {
+		if (cache && !StringUtil::StartsWith(uri, cache->disk_cache_dir)) { // to avoid deadlock in CleanCache()
+			cache->EvictEntry(uri);
+		}
+	}
+
 protected:
 	bool SupportsOpenFileExtended() const override {
 		return true;
@@ -91,37 +98,27 @@ public:
 
 	// write operations should invalidate the cache
 	void MoveFile(const string &source, const string &target, optional_ptr<FileOpener> opener) override {
-		if (cache) {
-			cache->EvictEntry(source);
-			cache->EvictEntry(target);
-		}
+		EvictFile(source);
+		EvictFile(target);
 		wrapped_fs->MoveFile(source, target, opener);
 	}
 	void RemoveFile(const string &uri, optional_ptr<FileOpener> opener) override {
-		if (cache) {
-			cache->EvictEntry(uri);
-		}
+		EvictFile(uri);
 		wrapped_fs->RemoveFile(uri, opener);
 	}
 	bool TryRemoveFile(const string &uri, optional_ptr<FileOpener> opener = nullptr) override {
-		if (cache) {
-			cache->EvictEntry(uri);
-		}
+		EvictFile(uri);
 		return wrapped_fs->TryRemoveFile(uri, opener);
 	}
 	// these two are not expected to be implemented in blob filesystems, but for completeness/safety they evict as well
 	void Truncate(FileHandle &handle, int64_t new_size) override {
 		auto &blob_handle = handle.Cast<DiskCacheFileHandle>();
-		if (blob_handle.cache) {
-			blob_handle.cache->EvictEntry(blob_handle.uri);
-		}
+		EvictFile(blob_handle.uri);
 		wrapped_fs->Truncate(*blob_handle.wrapped_handle, new_size);
 	}
 	bool Trim(FileHandle &handle, idx_t offset_bytes, idx_t length_bytes) override {
 		auto &blob_handle = handle.Cast<DiskCacheFileHandle>();
-		if (cache) {
-			cache->EvictEntry(blob_handle.uri);
-		}
+		EvictFile(blob_handle.uri);
 		return wrapped_fs->Trim(*blob_handle.wrapped_handle, offset_bytes, length_bytes);
 	}
 
@@ -333,6 +330,6 @@ private:
 shared_ptr<DiskCache> GetOrCreateDiskCache(DatabaseInstance &instance);
 
 // Filesystem wrapping utility function
-void WrapExistingFilesystems(DatabaseInstance &instance);
+void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs = false);
 
 } // namespace duckdb

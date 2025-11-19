@@ -117,12 +117,12 @@ create or replace table hydrate as
 (select uri, range_start, range_size from disk_cache_stats() order by all);
 
 statement ok
-from disk_cache_config(1024, '.disk_cache3/', 192);
+from disk_cache_config(1024, '.disk_cache3/', 255);
 
 query IIIII
 select * replace(substr(cache_path,0,13) as cache_path) from disk_cache_config();
 ----
-1073741824	.disk_cache3	0	192	1
+1073741824	.disk_cache3	0	255	1
 
 
 statement ok
