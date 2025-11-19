@@ -183,13 +183,13 @@ void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs) {
 			DUCKDB_LOG_ERROR(instance, "[DiskCache] Failed to extract '%s' - subsystem not wrapped", name.c_str());
 		}
 	}
-	// Not first call - log subsystems from existing db_fs
+	// log subsystems from existing db_fs
 	auto final_subsystems = db_fs.ListSubSystems();
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] After wrapping, have %zu subsystems", final_subsystems.size());
 	for (const auto &name : final_subsystems) {
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] - %s", name.c_str());
 	}
-	if (wrap_default_fs) { // we must replace the top-;evel VirtualFilesystem in order to change default_fs
+	if (wrap_default_fs) { // we must replace the top-level VirtualFilesystem in order to change default_fs
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Overloading LocalFileSystem default_fs");
 		auto default_fs = make_uniq<DiskCacheFileSystemWrapper>(make_uniq<LocalFileSystem>(), shared_cache);
 		auto new_vfs = make_uniq<VirtualFileSystem>(std::move(default_fs));
@@ -198,7 +198,7 @@ void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs) {
 			new_vfs->RegisterSubSystem(db_fs.ExtractSubSystem(name));
 		}
 		new_vfs->SetDisabledFileSystems(disabled_subsystems);
-		config.file_system = std::move(new_vfs);
+		config.file_system = std::move(new_vfs); // danger: no parquet_reads should be running when doing this
 	}
 	if (!fake_s3_seen) { // first call always registers fakes3:// test filesystem
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registering fake_s3:// filesystem for testing");
