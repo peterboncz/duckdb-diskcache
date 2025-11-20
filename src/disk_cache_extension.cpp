@@ -54,16 +54,18 @@ void default_cache_sizes(DatabaseInstance &db, idx_t &max_size_mb, idx_t &nr_io_
 static unique_ptr<FunctionData> DiskCacheConfigBind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<string> &names) {
 	// Setup return schema - returns useful cache statistics
-	return_types.push_back(LogicalType::BIGINT);  // max_size_bytes
+	return_types.push_back(LogicalType::BIGINT);  // max_size_MB
 	return_types.push_back(LogicalType::VARCHAR); // cache_path
-	return_types.push_back(LogicalType::BIGINT);  // current_size_bytes
+	return_types.push_back(LogicalType::BIGINT);  // current_size_MB
 	return_types.push_back(LogicalType::BIGINT);  // io_threads
+	return_types.push_back(LogicalType::VARCHAR); // unsafe_regexp_caching
 	return_types.push_back(LogicalType::BOOLEAN); // success
 
-	names.push_back("max_size_bytes");
+	names.push_back("max_size_MB");
 	names.push_back("cache_path");
-	names.push_back("current_size_bytes");
+	names.push_back("current_size_MB");
 	names.push_back("nr_io_threads");
+	names.push_back("unsafe_regexp_caching");
 	names.push_back("success");
 
 	bool query_only = false;         // Default to configuration mode
@@ -176,6 +178,7 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 	string cache_path = "";
 	idx_t current_size_bytes = 0;
 	idx_t writer_threads = 0;
+	string regex_patterns = "";
 
 	if (data_p.bind_data && shared_cache) {
 		auto &bind_data = data_p.bind_data->Cast<DiskCacheConfigBindData>();
@@ -211,14 +214,16 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 		cache_path = shared_cache->disk_cache_dir;
 		current_size_bytes = shared_cache->current_cache_size;
 		writer_threads = shared_cache->nr_io_threads;
+		regex_patterns = shared_cache->regex_patterns_str;
 	}
 	// Return the statistics tuple
 	output.SetCardinality(1);
-	output.data[0].SetValue(0, Value::BIGINT(max_size_bytes));     // max_size_bytes
-	output.data[1].SetValue(0, Value(cache_path));                 // cache_path
-	output.data[2].SetValue(0, Value::BIGINT(current_size_bytes)); // current_size_bytes
-	output.data[3].SetValue(0, Value::BIGINT(writer_threads));     // nr_io_threads
-	output.data[4].SetValue(0, Value::BOOLEAN(success));           // success
+	output.data[0].SetValue(0, Value::BIGINT(max_size_bytes / (1024 * 1024)));     // max_size_MB
+	output.data[1].SetValue(0, Value(cache_path));                                 // cache_path
+	output.data[2].SetValue(0, Value::BIGINT(current_size_bytes / (1024 * 1024))); // current_size_MB
+	output.data[3].SetValue(0, Value::BIGINT(writer_threads));                     // nr_io_threads
+	output.data[4].SetValue(0, Value(regex_patterns));                             // unsafe_regexp_caching
+	output.data[5].SetValue(0, Value::BOOLEAN(success));                           // success
 	global_state.tuples_processed = 1;
 }
 
