@@ -629,6 +629,9 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 void DiskCache::UpdateRegexPatterns(const string &regex_patterns_str) {
 	std::lock_guard<std::mutex> lock(regex_mutex);
 
+	// Store the original regex patterns string for later retrieval
+	this->regex_patterns_str = regex_patterns_str;
+
 	cached_regexps.clear(); // Clear existing patterns
 	if (regex_patterns_str.empty()) {
 		// Conservative mode: empty regexps

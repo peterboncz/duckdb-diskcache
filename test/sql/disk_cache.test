@@ -80,10 +80,10 @@ select count(*) from disk_cache_stats();
 ----
 0
 
-query IIIII
+query IIIIII
 select * replace(substr(cache_path,0,13) as cache_path) from disk_cache_config();
 ----
-1073741824	.disk_cache2	0	1	1
+1024	.disk_cache2	0	1	(empty)	1
 
 # we function better if the file cache is off (we then memcache ourselves). But after the first query there should ne no reuse yet 
 statement ok
@@ -119,10 +119,10 @@ create or replace table hydrate as
 statement ok
 from disk_cache_config(1024, '.disk_cache3/', 255);
 
-query IIIII
+query IIIIII
 select * replace(substr(cache_path,0,13) as cache_path) from disk_cache_config();
 ----
-1073741824	.disk_cache3	0	255	1
+1024	.disk_cache3	0	255	(empty)	1
 
 
 statement ok

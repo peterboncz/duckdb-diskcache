@@ -113,6 +113,7 @@ struct DiskCache {
 	// Cached regex patterns for file filtering
 	mutable std::mutex regex_mutex;
 	vector<std::regex> cached_regexps;
+	string regex_patterns_str; // Store the original regex patterns string
 
 	// Multi-threaded background I/O system
 	std::array<std::thread, MAX_IO_THREADS> io_threads;
