@@ -128,34 +128,33 @@ shared_ptr<DiskCache> GetOrCreateDiskCache(DatabaseInstance &instance) {
 	return new_cache;
 }
 
-void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs) {
+void WrapExistingFileSystem(DatabaseInstance &instance, bool unsafe_caching_enabled) {
 	auto &config = DBConfig::GetConfig(instance);
-	auto &db_fs = dynamic_cast<VirtualFileSystem &>(*config.file_system);
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Wrapping existing filesystems");
+	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Wrapping existing filesystem");
 	auto shared_cache = GetOrCreateDiskCache(instance);
 	if (!shared_cache->disk_cache_initialized) {
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Cache not initialized yet, skipping filesystem wrapping");
 		return;
 	}
+
 	// Target blob storage filesystems to wrap
 	vector<string> target_filesystems = {"AzureBlobStorageFileSystem", "HuggingFaceFileSystem", "S3FileSystem",
 	                                     "HTTPFileSystem"}; // this one is used for http[s], gcs and r2
 
-	// Try to wrap each target blob storage filesystem
+	// Try to wrap each target blob storage filesystem within the VirtualFileSystem
+	auto &db_fs = dynamic_cast<VirtualFileSystem &>(*config.file_system);
 	auto subsystems = db_fs.ListSubSystems();
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Found %zu registered subsystems", subsystems.size());
 
 	bool fake_s3_seen = false;
-	vector<string> disabled_subsystems;
 	for (const auto &name : subsystems) {
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Processing subsystem: '%s'", name.c_str());
-		if (db_fs.SubSystemIsDisabled(name)) {
-			disabled_subsystems.push_back(name);
-			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Skipping disabled subsystem: '%s'", name.c_str());
-			continue;
-		}
-		if (StringUtil::StartsWith(name, "DiskCache:")) { // Skip if already wrapped (starts with "DiskCache:")
-			fake_s3_seen |= (name == "DiskCache:fake_s3");
+		if (StringUtil::StartsWith(name, "DiskCache:")) { // Skip if already wrapped
+			// Log the wrapped filesystem name for test expectations
+			if (name == "DiskCache:fake_s3") {
+				fake_s3_seen = true;
+				DUCKDB_LOG_DEBUG(instance, "[DiskCache] --%s", name.c_str());
+			}
 			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Skipping already wrapped subsystem: '%s'", name.c_str());
 			continue;
 		}
@@ -173,39 +172,23 @@ void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs) {
 		}
 		auto extracted_fs = db_fs.ExtractSubSystem(name);
 		if (extracted_fs) {
-			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Successfully extracted subsystem: '%s' (GetName returns: '%s')",
-			                 name.c_str(), extracted_fs->GetName().c_str());
+			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Successfully extracted subsystem: '%s'", name.c_str());
 			auto wrapped_fs = make_uniq<DiskCacheFileSystemWrapper>(std::move(extracted_fs), shared_cache);
-			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Created wrapper with name: '%s'", wrapped_fs->GetName().c_str());
+			DUCKDB_LOG_DEBUG(instance, "[DiskCache] --%s", wrapped_fs->GetName().c_str());
 			db_fs.RegisterSubSystem(std::move(wrapped_fs));
 			DUCKDB_LOG_DEBUG(instance, "[DiskCache] Successfully registered wrapped subsystem for '%s'", name.c_str());
-		} else {
-			DUCKDB_LOG_ERROR(instance, "[DiskCache] Failed to extract '%s' - subsystem not wrapped", name.c_str());
 		}
 	}
-	// log subsystems from existing db_fs
-	auto final_subsystems = db_fs.ListSubSystems();
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] After wrapping, have %zu subsystems", final_subsystems.size());
-	for (const auto &name : final_subsystems) {
-		DUCKDB_LOG_DEBUG(instance, "[DiskCache] - %s", name.c_str());
-	}
-	if (wrap_default_fs) { // we must replace the top-level VirtualFilesystem in order to change default_fs
-		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Overloading LocalFileSystem default_fs");
-		auto default_fs = make_uniq<DiskCacheFileSystemWrapper>(make_uniq<LocalFileSystem>(), shared_cache);
-		auto new_vfs = make_uniq<VirtualFileSystem>(std::move(default_fs));
-		new_vfs->RegisterSubSystem(FileCompressionType::ZSTD, make_uniq<ZStdFileSystem>()); // DDB forgets this
-		for (const auto &name : subsystems) {
-			new_vfs->RegisterSubSystem(db_fs.ExtractSubSystem(name));
-		}
-		new_vfs->SetDisabledFileSystems(disabled_subsystems);
-		config.file_system = std::move(new_vfs); // danger: no parquet_reads should be running when doing this
-	}
-	if (!fake_s3_seen) { // first call always registers fakes3:// test filesystem
+
+	if (!fake_s3_seen) { // Register fakes3:// test filesystem
 		DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registering fake_s3:// filesystem for testing");
 		auto fake_s3_fs = make_uniq<FakeS3FileSystem>();
 		auto wrapped_fake_s3_fs = make_uniq<DiskCacheFileSystemWrapper>(std::move(fake_s3_fs), shared_cache);
-		config.file_system->RegisterSubSystem(std::move(wrapped_fake_s3_fs));
+		DUCKDB_LOG_DEBUG(instance, "[DiskCache] --%s", wrapped_fake_s3_fs->GetName().c_str());
+		db_fs.RegisterSubSystem(std::move(wrapped_fake_s3_fs));
 	}
+
+	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Successfully wrapped filesystem");
 }
 
 } // namespace duckdb

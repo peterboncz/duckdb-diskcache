@@ -5,6 +5,8 @@
 #include "duckdb/storage/object_cache.hpp"
 #include "duckdb/storage/external_file_cache.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
+#include "duckdb/parser/parsed_data/create_table_function_info.hpp"
 
 namespace duckdb {
 
@@ -204,8 +206,8 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 			// Update regex patterns and purge non-qualifying cache entries
 			shared_cache->UpdateRegexPatterns(bind_data.regex_patterns);
 			success = true;
-			// Now that cache is configured, wrap any existing filesystems
-			WrapExistingFilesystems(*context.db, bind_data.regex_patterns != "");
+			// Now that cache is configured, wrap the filesystem
+			WrapExistingFileSystem(*context.db, !bind_data.regex_patterns.empty());
 		}
 	}
 	// Get current cache statistics (works whether configuration succeeded or not)
@@ -387,9 +389,9 @@ public:
 	void OnExtensionLoaded(DatabaseInstance &db, const string &name) override {
 		auto extension_name = StringUtil::Lower(name);
 		if (extension_name == "httpfs" || extension_name == "azure") {
-			DUCKDB_LOG_DEBUG(db, "[DiskCache] Target extension '%s' loaded, automatically wrapping filesystems",
+			DUCKDB_LOG_DEBUG(db, "[DiskCache] Target extension '%s' loaded, automatically wrapping filesystem",
 			                 name.c_str());
-			WrapExistingFilesystems(db);
+			WrapExistingFileSystem(db);
 		}
 	}
 };
@@ -409,12 +411,16 @@ void DiskCacheExtension::Load(ExtensionLoader &loader) {
 	disk_cache_config_function.init_global = DiskCacheConfigInitGlobal;
 	disk_cache_config_function.varargs = LogicalType::ANY; // Allow variable arguments
 	loader.RegisterFunction(disk_cache_config_function);
+	disk_cache_config_function.name = "disk_cache_config_md_remote";
+	loader.RegisterFunction(disk_cache_config_function);
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_config function");
 
 	// Register disk_cache_stats table function
 	TableFunction disk_cache_stats_function("disk_cache_stats", {}, DiskCacheStatsFunction);
 	disk_cache_stats_function.bind = DiskCacheStatsBind;
 	disk_cache_stats_function.init_global = DiskCacheStatsInitGlobal;
+	loader.RegisterFunction(disk_cache_stats_function);
+	disk_cache_stats_function.name = "disk_cache_stats_md_remote";
 	loader.RegisterFunction(disk_cache_stats_function);
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_stats function");
 
@@ -423,6 +429,8 @@ void DiskCacheExtension::Load(ExtensionLoader &loader) {
 	                                           {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT},
 	                                           LogicalType::BOOLEAN, DiskCacheHydrateFunction);
 	disk_cache_hydrate_function.bind = DiskCacheHydrateBind;
+	loader.RegisterFunction(disk_cache_hydrate_function);
+	disk_cache_hydrate_function.name = "disk_cache_hydrate_md_remote";
 	loader.RegisterFunction(disk_cache_hydrate_function);
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_hydrate function");
 
@@ -436,8 +444,8 @@ void DiskCacheExtension::Load(ExtensionLoader &loader) {
 	// Register extension callback for automatic wrapping
 	config.extension_callbacks.push_back(make_uniq<DiskCacheExtensionCallback>());
 
-	// Wrap any existing filesystems (in case some were already loaded)
-	WrapExistingFilesystems(instance);
+	// Wrap the filesystem (in case some extensions were already loaded)
+	WrapExistingFileSystem(instance);
 	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Extension initialization complete!");
 }
 
