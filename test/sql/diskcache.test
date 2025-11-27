@@ -124,6 +124,5 @@ select * replace(substr(cache_path,0,12) as cache_path) from diskcache_config();
 ----
 1024	.diskcache3	0	255	(empty)	1
 
-
 statement ok
 select diskcache_hydrate(uri, range_start, range_size) from hydrate;
