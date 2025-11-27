@@ -330,6 +330,6 @@ private:
 shared_ptr<DiskCache> GetOrCreateDiskCache(DatabaseInstance &instance);
 
 // Filesystem wrapping utility function
-void WrapExistingFilesystems(DatabaseInstance &instance, bool wrap_default_fs = false);
+void WrapExistingFileSystem(DatabaseInstance &instance, bool unsafe_caching_enabled = false);
 
 } // namespace duckdb
