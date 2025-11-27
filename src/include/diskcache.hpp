@@ -22,7 +22,7 @@
 namespace duckdb {
 
 // Forward declarations
-struct DiskCache;
+struct Diskcache;
 
 // Canceled marker for nr_bytes field and error return values
 constexpr idx_t CANCELED = static_cast<idx_t>(-1);
@@ -38,26 +38,26 @@ struct WriteBuffer {
 };
 
 //===----------------------------------------------------------------------===//
-// DiskCacheFileRange - represents a cached range with its own disk file
+// DiskcacheFileRange - represents a cached range with its own disk file
 //===----------------------------------------------------------------------===//
-struct DiskCacheFileRange {
+struct DiskcacheFileRange {
 	idx_t range_start, range_end;                                    // Range in remote blob file (uri)
 	shared_ptr<WriteBuffer> write_buf;                               // write buffer shared with IO write queue
 	idx_t usage_count = 0, bytes_from_cache = 0, bytes_from_mem = 0; // stats
-	DiskCacheFileRange *lru_prev = nullptr, *lru_next = nullptr;     // LRU doubly-linked list
+	DiskcacheFileRange *lru_prev = nullptr, *lru_next = nullptr;     // LRU doubly-linked list
 
-	DiskCacheFileRange(idx_t start, idx_t end, shared_ptr<WriteBuffer> write_buffer)
+	DiskcacheFileRange(idx_t start, idx_t end, shared_ptr<WriteBuffer> write_buffer)
 	    : range_start(start), range_end(end), write_buf(std::move(write_buffer)) {
 	}
 };
 
-struct DiskCacheEntry {
+struct DiskcacheEntry {
 	string uri;                                        // full URL of the blob
-	map<idx_t, unique_ptr<DiskCacheFileRange>> ranges; // Map of start position to DiskCacheFileRanges
+	map<idx_t, unique_ptr<DiskcacheFileRange>> ranges; // Map of start position to DiskcacheFileRanges
 };
 
 // Statistics structure
-struct DiskCacheRangeInfo {
+struct DiskcacheRangeInfo {
 	string uri;             // Full URI including protocol (e.g., s3://bucket/path)
 	string file;            // Disk file where this range is stored in the cache
 	idx_t range_start;      // Start position in blob of this range
@@ -67,33 +67,33 @@ struct DiskCacheRangeInfo {
 	idx_t bytes_from_mem;   // memory bytes read from this cached range
 };
 
-// DiskCacheWriteJob - async write job for writing to cache without delaying reads
-struct DiskCacheWriteJob {
+// DiskcacheWriteJob - async write job for writing to cache without delaying reads
+struct DiskcacheWriteJob {
 	string uri;                        // For error handling and cache invalidation
 	shared_ptr<WriteBuffer> write_buf; // Shared write buffer
 	idx_t file_id;                     // File ID for directory creation
 };
 
-// DiskCacheReadJob - async read job for prefetching (used during fast cache hydration)
-struct DiskCacheReadJob {
+// DiskcacheReadJob - async read job for prefetching (used during fast cache hydration)
+struct DiskcacheReadJob {
 	string uri;        // Cache uri of the blob that gets cached
 	idx_t range_start; // Start position in file
 	idx_t range_size;  // Bytes to read
 };
 
 //===----------------------------------------------------------------------===//
-// DiskCache - Main cache implementation
+// Diskcache - Main cache implementation
 //===----------------------------------------------------------------------===//
 
-struct DiskCache {
+struct Diskcache {
 	static constexpr idx_t MAX_IO_THREADS = 256;
 	static constexpr idx_t URI_SUFFIX_LEN = 15;
 
 	// Configuration and state
 	shared_ptr<DatabaseInstance> db_instance;
-	bool disk_cache_initialized = false, disk_cache_shutting_down = false;
+	bool diskcache_initialized = false, diskcache_shutting_down = false;
 	string path_sep;       // normally "/", but "\" on windows
-	string disk_cache_dir; // where we store data temporarily
+	string diskcache_dir; // where we store data temporarily
 	idx_t total_cache_capacity = 0;
 
 	// Memory cache for disk-cached files (our own ExternalFileCache instance)
@@ -104,9 +104,9 @@ struct DiskCache {
 	std::bitset<4096 + 4096 * 256> subdir_created; // 4096 XXX/ directories plus 4096*256 XXX/YY directories
 
 	// Cache maps and LRU
-	mutable std::mutex disk_cache_mutex;                                     // Protects cache, LRU lists, sizes
-	unique_ptr<unordered_map<string, unique_ptr<DiskCacheEntry>>> key_cache; // 1 entry per file (+rangelist per entry)
-	DiskCacheFileRange *lru_head = nullptr, *lru_tail = nullptr;             // LRU on the ranges (not on the files)
+	mutable std::mutex diskcache_mutex;                                     // Protects cache, LRU lists, sizes
+	unique_ptr<unordered_map<string, unique_ptr<DiskcacheEntry>>> key_cache; // 1 entry per file (+rangelist per entry)
+	DiskcacheFileRange *lru_head = nullptr, *lru_tail = nullptr;             // LRU on the ranges (not on the files)
 	idx_t current_cache_size = 0, nr_ranges = 0, current_file_id = 10000000;
 	idx_t memcache_size = 0; // Track size of data in our memcache
 
@@ -117,8 +117,8 @@ struct DiskCache {
 
 	// Multi-threaded background I/O system
 	std::array<std::thread, MAX_IO_THREADS> io_threads;
-	std::array<std::queue<DiskCacheWriteJob>, MAX_IO_THREADS> write_queues;
-	std::array<std::queue<DiskCacheReadJob>, MAX_IO_THREADS> read_queues;
+	std::array<std::queue<DiskcacheWriteJob>, MAX_IO_THREADS> write_queues;
+	std::array<std::queue<DiskcacheReadJob>, MAX_IO_THREADS> read_queues;
 	std::array<std::mutex, MAX_IO_THREADS> io_mutexes;
 	std::array<std::condition_variable, MAX_IO_THREADS> io_cvs;
 	std::atomic<bool> shutdown_io_threads;
@@ -126,27 +126,27 @@ struct DiskCache {
 	idx_t nr_io_threads;
 
 	// Constructor/Destructor
-	explicit DiskCache(DatabaseInstance *db_instance_p = nullptr)
-	    : key_cache(make_uniq<unordered_map<string, unique_ptr<DiskCacheEntry>>>()), shutdown_io_threads(false),
+	explicit Diskcache(DatabaseInstance *db_instance_p = nullptr)
+	    : key_cache(make_uniq<unordered_map<string, unique_ptr<DiskcacheEntry>>>()), shutdown_io_threads(false),
 	      read_job_counter(0), nr_io_threads(1) {
 		if (db_instance_p) {
 			db_instance = db_instance_p->shared_from_this();
 		}
 	}
-	~DiskCache() {
-		disk_cache_shutting_down = true;
+	~Diskcache() {
+		diskcache_shutting_down = true;
 		StopIOThreads();
 	}
 
 	// Logging methods
 	void LogDebug(const string &message) const {
-		if (db_instance && !disk_cache_shutting_down) {
-			DUCKDB_LOG_DEBUG(*db_instance, "[DiskCache] %s", message.c_str());
+		if (db_instance && !diskcache_shutting_down) {
+			DUCKDB_LOG_DEBUG(*db_instance, "[Diskcache] %s", message.c_str());
 		}
 	}
 	void LogError(const string &message) const {
-		if (db_instance && !disk_cache_shutting_down) {
-			DUCKDB_LOG_ERROR(*db_instance, "[DiskCache] %s", message.c_str());
+		if (db_instance && !diskcache_shutting_down) {
+			DUCKDB_LOG_ERROR(*db_instance, "[Diskcache] %s", message.c_str());
 		}
 	}
 
@@ -163,9 +163,9 @@ struct DiskCache {
 		        ? uri.substr(std::max<idx_t>(last_sep + 1, uri.length() > 15 ? uri.length() - 15 : 0))
 		        : (uri.length() > 15 ? uri.substr(uri.length() - 15) : uri);
 
-		// Format: disk_cache_dir/XXX/YY/fileid_offset_size_last15chars
+		// Format: diskcache_dir/XXX/YY/fileid_offset_size_last15chars
 		std::ostringstream path;
-		path << disk_cache_dir << std::setfill('0') << std::setw(3) << std::hex << xxx << path_sep << std::setfill('0')
+		path << diskcache_dir << std::setfill('0') << std::setw(3) << std::hex << xxx << path_sep << std::setfill('0')
 		     << std::setw(2) << std::hex << yy << path_sep << std::dec << file_id << "_" << range_start << "_"
 		     << range_size << "_" << filename_suffix;
 		return path.str();
@@ -200,17 +200,17 @@ struct DiskCache {
 		memcache_size = 0;
 	}
 
-	DiskCacheEntry *FindEntry(const string &uri) {
+	DiskcacheEntry *FindEntry(const string &uri) {
 		auto map_key = StringUtil::Lower(uri);
 		auto it = key_cache->find(map_key);
 		return (it != key_cache->end()) ? it->second.get() : nullptr;
 	}
 
-	DiskCacheEntry *UpsertEntry(const string &uri) {
+	DiskcacheEntry *UpsertEntry(const string &uri) {
 		auto map_key = StringUtil::Lower(uri);
 		auto it = key_cache->find(map_key);
 		if (it == key_cache->end()) {
-			auto new_entry = make_uniq<DiskCacheEntry>();
+			auto new_entry = make_uniq<DiskcacheEntry>();
 			new_entry->uri = uri;
 			LogDebug("Insert URI '" + uri + "'");
 			auto *cache_entry = new_entry.get();
@@ -220,7 +220,7 @@ struct DiskCache {
 		return it->second.get();
 	}
 	void EvictEntry(const string &uri);
-	void EvictRange(DiskCacheFileRange *range) {
+	void EvictRange(DiskcacheFileRange *range) {
 		auto buf = range->write_buf->buf;
 		if (buf) {
 			range->write_buf->nr_bytes = CANCELED; // Write is ongoing, cancel it
@@ -233,13 +233,13 @@ struct DiskCache {
 	}
 
 	// LRU management
-	void TouchLRU(DiskCacheFileRange *range) {
+	void TouchLRU(DiskcacheFileRange *range) {
 		if (range != lru_head) {
 			RemoveFromLRU(range);
 			AddToLRUFront(range);
 		}
 	}
-	void RemoveFromLRU(DiskCacheFileRange *range) {
+	void RemoveFromLRU(DiskcacheFileRange *range) {
 		if (range->lru_prev) {
 			range->lru_prev->lru_next = range->lru_next;
 		} else {
@@ -253,7 +253,7 @@ struct DiskCache {
 		range->lru_prev = range->lru_next = nullptr;
 	}
 
-	void AddToLRUFront(DiskCacheFileRange *range) {
+	void AddToLRUFront(DiskcacheFileRange *range) {
 		range->lru_next = lru_head;
 		range->lru_prev = nullptr;
 		if (lru_head) {
@@ -271,14 +271,14 @@ struct DiskCache {
 	bool WriteToCacheFile(const string &file_path, const void *buf, idx_t len);
 	idx_t ReadFromCacheFile(const string &file_path, void *buf, idx_t len, idx_t offset); // Returns bytes_from_mem
 	bool DeleteCacheFile(const string &file_path);
-	vector<DiskCacheRangeInfo> GetStatistics() const;
+	vector<DiskcacheRangeInfo> GetStatistics() const;
 
 	// Thread management
 	void MainIOThreadLoop(idx_t thread_id);
-	void ProcessWriteJob(DiskCacheWriteJob &job);
-	void ProcessReadJob(DiskCacheReadJob &job);
-	void QueueIOWrite(DiskCacheWriteJob &job, idx_t partition);
-	void QueueIORead(DiskCacheReadJob &job);
+	void ProcessWriteJob(DiskcacheWriteJob &job);
+	void ProcessReadJob(DiskcacheReadJob &job);
+	void QueueIOWrite(DiskcacheWriteJob &job, idx_t partition);
+	void QueueIORead(DiskcacheReadJob &job);
 	void StartIOThreads(idx_t thread_count);
 	void StopIOThreads();
 

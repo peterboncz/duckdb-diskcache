@@ -1,7 +1,7 @@
 #define DUCKDB_EXTENSION_MAIN
 
-#include "include/disk_cache_extension.hpp"
-#include "include/disk_cache_fs_wrapper.hpp"
+#include "include/diskcache_extension.hpp"
+#include "include/diskcache_fs_wrapper.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "duckdb/storage/external_file_cache.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -14,23 +14,23 @@ namespace duckdb {
 // Table Functions
 //===----------------------------------------------------------------------===//
 
-// Bind data for disk_cache_config function
-struct DiskCacheConfigBindData : public FunctionData {
+// Bind data for diskcache_config function
+struct DiskcacheConfigBindData : public FunctionData {
 	idx_t max_size_mb;
 	string directory;
 	idx_t nr_io_threads;
 	string regex_patterns; // New regex patterns parameter
 	bool query_only;       // True if no parameters provided - just query current values
 
-	DiskCacheConfigBindData(idx_t size, string dir, idx_t threads, string regexps = "", bool query = false)
+	DiskcacheConfigBindData(idx_t size, string dir, idx_t threads, string regexps = "", bool query = false)
 	    : max_size_mb(size), directory(std::move(dir)), nr_io_threads(threads), regex_patterns(std::move(regexps)),
 	      query_only(query) {
 	}
 	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<DiskCacheConfigBindData>(max_size_mb, directory, nr_io_threads, regex_patterns, query_only);
+		return make_uniq<DiskcacheConfigBindData>(max_size_mb, directory, nr_io_threads, regex_patterns, query_only);
 	}
 	bool Equals(const FunctionData &other_p) const override {
-		auto &other = other_p.Cast<DiskCacheConfigBindData>();
+		auto &other = other_p.Cast<DiskcacheConfigBindData>();
 		return max_size_mb == other.max_size_mb && directory == other.directory &&
 		       nr_io_threads == other.nr_io_threads && regex_patterns == other.regex_patterns &&
 		       query_only == other.query_only;
@@ -38,9 +38,9 @@ struct DiskCacheConfigBindData : public FunctionData {
 };
 
 // Global state for both table functions
-struct DiskCacheGlobalState : public GlobalTableFunctionState {
+struct DiskcacheGlobalState : public GlobalTableFunctionState {
 	idx_t tuples_processed = 0;
-	vector<DiskCacheRangeInfo> stats;
+	vector<DiskcacheRangeInfo> stats;
 
 	idx_t MaxThreads() const override {
 		return 1; // Single threaded for simplicity
@@ -52,8 +52,8 @@ void default_cache_sizes(DatabaseInstance &db, idx_t &max_size_mb, idx_t &nr_io_
 	nr_io_threads = std::min<idx_t>(255, db.NumberOfThreads() * 12);
 }
 
-// Bind function for disk_cache_config
-static unique_ptr<FunctionData> DiskCacheConfigBind(ClientContext &context, TableFunctionBindInput &input,
+// Bind function for diskcache_config
+static unique_ptr<FunctionData> DiskcacheConfigBind(ClientContext &context, TableFunctionBindInput &input,
                                                     vector<LogicalType> &return_types, vector<string> &names) {
 	// Setup return schema - returns useful cache statistics
 	return_types.push_back(LogicalType::BIGINT);  // max_size_MB
@@ -83,64 +83,64 @@ static unique_ptr<FunctionData> DiskCacheConfigBind(ClientContext &context, Tabl
 	// Parse arguments if provided (max_size_mb, directory, nr_io_threads, regex_patterns)
 	if (input.inputs.size() >= 1) {
 		if (input.inputs[0].IsNull()) {
-			throw BinderException("disk_cache_config: max_size_mb cannot be NULL");
+			throw BinderException("diskcache_config: max_size_mb cannot be NULL");
 		}
 		auto size_val = input.inputs[0];
 		if (size_val.type().id() != LogicalTypeId::BIGINT && size_val.type().id() != LogicalTypeId::INTEGER) {
-			throw BinderException("disk_cache_config: max_size_mb must be an integer");
+			throw BinderException("diskcache_config: max_size_mb must be an integer");
 		}
 		max_size_mb = size_val.GetValue<idx_t>();
 	}
 	if (input.inputs.size() >= 2) {
 		if (input.inputs[1].IsNull()) {
-			throw BinderException("disk_cache_config: directory cannot be NULL");
+			throw BinderException("diskcache_config: directory cannot be NULL");
 		}
 		directory = StringValue::Get(input.inputs[1]);
 	}
 	if (input.inputs.size() >= 3) {
 		if (input.inputs[2].IsNull()) {
-			throw BinderException("disk_cache_config: nr_io_threads cannot be NULL");
+			throw BinderException("diskcache_config: nr_io_threads cannot be NULL");
 		}
 		auto threads_val = input.inputs[2];
 		if (threads_val.type().id() != LogicalTypeId::BIGINT && threads_val.type().id() != LogicalTypeId::INTEGER) {
-			throw BinderException("disk_cache_config: nr_io_threads must be an integer");
+			throw BinderException("diskcache_config: nr_io_threads must be an integer");
 		}
 		nr_io_threads = threads_val.GetValue<idx_t>();
 		if (nr_io_threads <= 0) {
-			throw BinderException("disk_cache_config: nr_io_threads must be positive");
+			throw BinderException("diskcache_config: nr_io_threads must be positive");
 		}
 		if (nr_io_threads > 256) {
-			throw BinderException("disk_cache_config: nr_io_threads cannot exceed 256");
+			throw BinderException("diskcache_config: nr_io_threads cannot exceed 256");
 		}
 	}
 	if (input.inputs.size() >= 4) {
 		if (input.inputs[3].IsNull()) {
-			throw BinderException("disk_cache_config: regex_patterns cannot be NULL");
+			throw BinderException("diskcache_config: regex_patterns cannot be NULL");
 		}
 		auto patterns_val = input.inputs[3];
 		if (patterns_val.type().id() != LogicalTypeId::VARCHAR) {
-			throw BinderException("disk_cache_config: regex_patterns must be a string");
+			throw BinderException("diskcache_config: regex_patterns must be a string");
 		}
 		regex_patterns = StringValue::Get(patterns_val);
 	}
-	return make_uniq<DiskCacheConfigBindData>(max_size_mb, std::move(directory), nr_io_threads,
+	return make_uniq<DiskcacheConfigBindData>(max_size_mb, std::move(directory), nr_io_threads,
 	                                          std::move(regex_patterns), query_only);
 }
 
-// Init function for disk_cache_config global state
-static unique_ptr<GlobalTableFunctionState> DiskCacheConfigInitGlobal(ClientContext &context,
+// Init function for diskcache_config global state
+static unique_ptr<GlobalTableFunctionState> DiskcacheConfigInitGlobal(ClientContext &context,
                                                                       TableFunctionInitInput &input) {
-	return make_uniq<DiskCacheGlobalState>();
+	return make_uniq<DiskcacheGlobalState>();
 }
 
-// Init function for disk_cache_stats global state (same as config)
-static unique_ptr<GlobalTableFunctionState> DiskCacheStatsInitGlobal(ClientContext &context,
+// Init function for diskcache_stats global state (same as config)
+static unique_ptr<GlobalTableFunctionState> DiskcacheStatsInitGlobal(ClientContext &context,
                                                                      TableFunctionInitInput &input) {
-	return make_uniq<DiskCacheGlobalState>();
+	return make_uniq<DiskcacheGlobalState>();
 }
 
-// Bind function for disk_cache_stats
-static unique_ptr<FunctionData> DiskCacheStatsBind(ClientContext &context, TableFunctionBindInput &input,
+// Bind function for diskcache_stats
+static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, TableFunctionBindInput &input,
                                                    vector<LogicalType> &return_types, vector<string> &names) {
 	// Setup return schema - returns cache statistics with 7 columns
 	return_types.push_back(LogicalType::VARCHAR); // uri (with protocol)
@@ -162,19 +162,19 @@ static unique_ptr<FunctionData> DiskCacheStatsBind(ClientContext &context, Table
 	return nullptr; // No bind data needed for stats function
 }
 
-// disk_cache_config(directory, max_size_mb, nr_io_threads) - Configure the blob cache
-static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &global_state = data_p.global_state->Cast<DiskCacheGlobalState>();
+// diskcache_config(directory, max_size_mb, nr_io_threads) - Configure the blob cache
+static void DiskcacheConfigFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &global_state = data_p.global_state->Cast<DiskcacheGlobalState>();
 
 	// Return nothing if we've already processed our single tuple
 	if (global_state.tuples_processed >= 1) {
 		output.SetCardinality(0);
 		return;
 	}
-	DUCKDB_LOG_DEBUG(*context.db, "[DiskCache] disk_cache_config called");
+	DUCKDB_LOG_DEBUG(*context.db, "[Diskcache] diskcache_config called");
 
 	// Process the single configuration tuple
-	auto shared_cache = GetOrCreateDiskCache(*context.db);
+	auto shared_cache = GetOrCreateDiskcache(*context.db);
 	bool success = false;
 	idx_t max_size_bytes = 0;
 	string cache_path = "";
@@ -183,16 +183,16 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 	string regex_patterns = "";
 
 	if (data_p.bind_data && shared_cache) {
-		auto &bind_data = data_p.bind_data->Cast<DiskCacheConfigBindData>();
+		auto &bind_data = data_p.bind_data->Cast<DiskcacheConfigBindData>();
 
 		if (bind_data.query_only) {
 			// Query-only mode - just return current values without changing anything
-			DUCKDB_LOG_DEBUG(*context.db, "[DiskCache] Querying cache configuration");
+			DUCKDB_LOG_DEBUG(*context.db, "[Diskcache] Querying cache configuration");
 			success = true; // Query always succeeds
 		} else {
 			// Configuration mode - actually configure the cache
 			DUCKDB_LOG_DEBUG(*context.db,
-			                 "[DiskCache] Configuring cache: directory='%s', max_size=%zu MB, nr_io_threads=%zu, "
+			                 "[Diskcache] Configuring cache: directory='%s', max_size=%zu MB, nr_io_threads=%zu, "
 			                 "regex_patterns='%s'",
 			                 bind_data.directory.c_str(), bind_data.max_size_mb, bind_data.nr_io_threads,
 			                 bind_data.regex_patterns.c_str());
@@ -211,9 +211,9 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 		}
 	}
 	// Get current cache statistics (works whether configuration succeeded or not)
-	if (shared_cache && shared_cache->disk_cache_initialized) {
+	if (shared_cache && shared_cache->diskcache_initialized) {
 		max_size_bytes = shared_cache->total_cache_capacity;
-		cache_path = shared_cache->disk_cache_dir;
+		cache_path = shared_cache->diskcache_dir;
 		current_size_bytes = shared_cache->current_cache_size;
 		writer_threads = shared_cache->nr_io_threads;
 		regex_patterns = shared_cache->regex_patterns_str;
@@ -229,12 +229,12 @@ static void DiskCacheConfigFunction(ClientContext &context, TableFunctionInput &
 	global_state.tuples_processed = 1;
 }
 
-// disk_cache_stats() - Return cache statistics in LRU order with chunking
-static void DiskCacheStatsFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
-	auto &global_state = data.global_state->Cast<DiskCacheGlobalState>();
+// diskcache_stats() - Return cache statistics in LRU order with chunking
+static void DiskcacheStatsFunction(ClientContext &context, TableFunctionInput &data, DataChunk &output) {
+	auto &global_state = data.global_state->Cast<DiskcacheGlobalState>();
 	// Load data on first call
 	if (global_state.tuples_processed == 0) {
-		auto cache = GetOrCreateDiskCache(*context.db);
+		auto cache = GetOrCreateDiskcache(*context.db);
 		global_state.stats = cache->GetStatistics();
 	}
 	auto &stats = global_state.stats;
@@ -257,7 +257,7 @@ static void DiskCacheStatsFunction(ClientContext &context, TableFunctionInput &d
 }
 
 //===----------------------------------------------------------------------===//
-// disk_cache_hydrate - Scalar function to hydrate (prefetch) ranges into cache
+// diskcache_hydrate - Scalar function to hydrate (prefetch) ranges into cache
 //===----------------------------------------------------------------------===//
 
 struct HydrateRange {
@@ -266,34 +266,34 @@ struct HydrateRange {
 	idx_t original_size; // Sum of original range sizes
 };
 
-struct DiskCacheHydrateBindData : public FunctionData {
-	shared_ptr<DiskCache> cache;
+struct DiskcacheHydrateBindData : public FunctionData {
+	shared_ptr<Diskcache> cache;
 
-	explicit DiskCacheHydrateBindData(shared_ptr<DiskCache> cache_p) : cache(std::move(cache_p)) {
+	explicit DiskcacheHydrateBindData(shared_ptr<Diskcache> cache_p) : cache(std::move(cache_p)) {
 	}
 
 	unique_ptr<FunctionData> Copy() const override {
-		return make_uniq<DiskCacheHydrateBindData>(cache);
+		return make_uniq<DiskcacheHydrateBindData>(cache);
 	}
 
 	bool Equals(const FunctionData &other_p) const override {
-		auto &other = other_p.Cast<DiskCacheHydrateBindData>();
+		auto &other = other_p.Cast<DiskcacheHydrateBindData>();
 		return cache == other.cache;
 	}
 };
 
-static unique_ptr<FunctionData> DiskCacheHydrateBind(ClientContext &context, ScalarFunction &bound_function,
+static unique_ptr<FunctionData> DiskcacheHydrateBind(ClientContext &context, ScalarFunction &bound_function,
                                                      vector<unique_ptr<Expression>> &arguments) {
-	auto cache = GetOrCreateDiskCache(*context.db);
-	return make_uniq<DiskCacheHydrateBindData>(cache);
+	auto cache = GetOrCreateDiskcache(*context.db);
+	return make_uniq<DiskcacheHydrateBindData>(cache);
 }
 
-static void DiskCacheHydrateFunction(DataChunk &args, ExpressionState &state, Vector &result) {
+static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &func_data = func_expr.bind_info->Cast<DiskCacheHydrateBindData>();
+	auto &func_data = func_expr.bind_info->Cast<DiskcacheHydrateBindData>();
 	auto &cache = func_data.cache;
 
-	if (!cache || !cache->disk_cache_initialized) {
+	if (!cache || !cache->diskcache_initialized) {
 		// Cache not initialized - return FALSE for all rows
 		result.SetVectorType(VectorType::CONSTANT_VECTOR);
 		ConstantVector::GetData<bool>(result)[0] = false;
@@ -318,7 +318,7 @@ static void DiskCacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 
 	// Helper lambda to schedule a range
 	auto schedule_range = [&cache](const HydrateRange &range) {
-		DiskCacheReadJob job;
+		DiskcacheReadJob job;
 		job.uri = range.uri;
 		job.range_start = range.start;
 		job.range_size = range.end - range.start;
@@ -382,71 +382,71 @@ static void DiskCacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 }
 
 //===----------------------------------------------------------------------===//
-// DiskCacheExtensionCallback - Automatic wrapping when target extensions load
+// DiskcacheExtensionCallback - Automatic wrapping when target extensions load
 //===----------------------------------------------------------------------===//
-class DiskCacheExtensionCallback : public ExtensionCallback {
+class DiskcacheExtensionCallback : public ExtensionCallback {
 public:
 	void OnExtensionLoaded(DatabaseInstance &db, const string &name) override {
 		auto extension_name = StringUtil::Lower(name);
 		if (extension_name == "httpfs" || extension_name == "azure") {
-			DUCKDB_LOG_DEBUG(db, "[DiskCache] Target extension '%s' loaded, automatically wrapping filesystem",
+			DUCKDB_LOG_DEBUG(db, "[Diskcache] Target extension '%s' loaded, automatically wrapping filesystem",
 			                 name.c_str());
 			WrapExistingFileSystem(db);
 		}
 	}
 };
 
-void DiskCacheExtension::Load(ExtensionLoader &loader) {
+void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	auto &instance = loader.GetDatabaseInstance();
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] DiskCache extension loaded!");
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Diskcache extension loaded!");
 	// Get configuration for callbacks
 	auto &config = DBConfig::GetConfig(instance);
 
 	// Register table functions
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registering table functions...");
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registering table functions...");
 
-	// Register disk_cache_config table function (supports 0, 1, 2, 3, or 4 arguments)
-	TableFunction disk_cache_config_function("disk_cache_config", {}, DiskCacheConfigFunction);
-	disk_cache_config_function.bind = DiskCacheConfigBind;
-	disk_cache_config_function.init_global = DiskCacheConfigInitGlobal;
-	disk_cache_config_function.varargs = LogicalType::ANY; // Allow variable arguments
-	loader.RegisterFunction(disk_cache_config_function);
-	disk_cache_config_function.name = "disk_cache_config_md_remote";
-	loader.RegisterFunction(disk_cache_config_function);
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_config function");
+	// Register diskcache_config table function (supports 0, 1, 2, 3, or 4 arguments)
+	TableFunction diskcache_config_function("diskcache_config", {}, DiskcacheConfigFunction);
+	diskcache_config_function.bind = DiskcacheConfigBind;
+	diskcache_config_function.init_global = DiskcacheConfigInitGlobal;
+	diskcache_config_function.varargs = LogicalType::ANY; // Allow variable arguments
+	loader.RegisterFunction(diskcache_config_function);
+	diskcache_config_function.name = "diskcache_config_md_remote";
+	loader.RegisterFunction(diskcache_config_function);
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_config function");
 
-	// Register disk_cache_stats table function
-	TableFunction disk_cache_stats_function("disk_cache_stats", {}, DiskCacheStatsFunction);
-	disk_cache_stats_function.bind = DiskCacheStatsBind;
-	disk_cache_stats_function.init_global = DiskCacheStatsInitGlobal;
-	loader.RegisterFunction(disk_cache_stats_function);
-	disk_cache_stats_function.name = "disk_cache_stats_md_remote";
-	loader.RegisterFunction(disk_cache_stats_function);
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_stats function");
+	// Register diskcache_stats table function
+	TableFunction diskcache_stats_function("diskcache_stats", {}, DiskcacheStatsFunction);
+	diskcache_stats_function.bind = DiskcacheStatsBind;
+	diskcache_stats_function.init_global = DiskcacheStatsInitGlobal;
+	loader.RegisterFunction(diskcache_stats_function);
+	diskcache_stats_function.name = "diskcache_stats_md_remote";
+	loader.RegisterFunction(diskcache_stats_function);
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_stats function");
 
-	// Register disk_cache_hydrate scalar function
-	ScalarFunction disk_cache_hydrate_function("disk_cache_hydrate",
+	// Register diskcache_hydrate scalar function
+	ScalarFunction diskcache_hydrate_function("diskcache_hydrate",
 	                                           {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT},
-	                                           LogicalType::BOOLEAN, DiskCacheHydrateFunction);
-	disk_cache_hydrate_function.bind = DiskCacheHydrateBind;
-	loader.RegisterFunction(disk_cache_hydrate_function);
-	disk_cache_hydrate_function.name = "disk_cache_hydrate_md_remote";
-	loader.RegisterFunction(disk_cache_hydrate_function);
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Registered disk_cache_hydrate function");
+	                                           LogicalType::BOOLEAN, DiskcacheHydrateFunction);
+	diskcache_hydrate_function.bind = DiskcacheHydrateBind;
+	loader.RegisterFunction(diskcache_hydrate_function);
+	diskcache_hydrate_function.name = "diskcache_hydrate_md_remote";
+	loader.RegisterFunction(diskcache_hydrate_function);
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_hydrate function");
 
 	/// create an initial cache
 	idx_t max_size_mb, nr_io_threads;
 	default_cache_sizes(instance, max_size_mb, nr_io_threads);
-	auto shared_cache = GetOrCreateDiskCache(instance);
+	auto shared_cache = GetOrCreateDiskcache(instance);
 	shared_cache->path_sep = instance.GetFileSystem().PathSeparator("");
-	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, ".disk_cache" + shared_cache->path_sep, nr_io_threads);
+	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, ".diskcache" + shared_cache->path_sep, nr_io_threads);
 
 	// Register extension callback for automatic wrapping
-	config.extension_callbacks.push_back(make_uniq<DiskCacheExtensionCallback>());
+	config.extension_callbacks.push_back(make_uniq<DiskcacheExtensionCallback>());
 
 	// Wrap the filesystem (in case some extensions were already loaded)
 	WrapExistingFileSystem(instance);
-	DUCKDB_LOG_DEBUG(instance, "[DiskCache] Extension initialization complete!");
+	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Extension initialization complete!");
 }
 
 } // namespace duckdb
@@ -454,8 +454,8 @@ void DiskCacheExtension::Load(ExtensionLoader &loader) {
 #ifdef DUCKDB_BUILD_LOADABLE_EXTENSION
 extern "C" {
 
-DUCKDB_CPP_EXTENSION_ENTRY(disk_cache, loader) {
-	duckdb::DiskCacheExtension extension;
+DUCKDB_CPP_EXTENSION_ENTRY(diskcache, loader) {
+	duckdb::DiskcacheExtension extension;
 	extension.Load(loader);
 }
 }

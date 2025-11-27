@@ -1,10 +1,10 @@
-# name: test/sql/disk_cache.test
-# description: test disk_cache extension
+# name: test/sql/diskcache.test
+# description: test diskcache extension
 # group: [sql]
 
 require parquet
 
-require disk_cache
+require diskcache
 
 statement ok
 call enable_logging(level='debug');
@@ -18,10 +18,10 @@ load httpfs
 query I
 select message.substr(15) from duckdb_logs where message.substr(13,1) = '-';
 ----
-DiskCache:fake_s3
-DiskCache:HTTPFileSystem
-DiskCache:HuggingFaceFileSystem
-DiskCache:S3FileSystem
+Diskcache:fake_s3
+Diskcache:HTTPFileSystem
+Diskcache:HuggingFaceFileSystem
+Diskcache:S3FileSystem
 
 statement ok
 install tpch
@@ -39,7 +39,7 @@ statement ok
 select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
 query II
-select count(*), sum(usage_count) from disk_cache_stats();
+select count(*), sum(usage_count) from diskcache_stats();
 ----
 6	0
 
@@ -47,13 +47,13 @@ statement ok
 select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
 query II
-select count(*), sum(usage_count) from disk_cache_stats();
+select count(*), sum(usage_count) from diskcache_stats();
 ----
 6	6
 
 # bytes_from_mem is 0 since the DuckDB ExternalFileCache is active (default)
 query I
-select sum(bytes_from_mem) = 0 from disk_cache_stats();
+select sum(bytes_from_mem) = 0 from diskcache_stats();
 ----
 1
 
@@ -61,29 +61,29 @@ statement ok
 select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
 query II
-select count(*), sum(usage_count) from disk_cache_stats();
+select count(*), sum(usage_count) from diskcache_stats();
 ----
 6	12	
 
 # bytes_from_mem will be 0 (no separate memcache layer anymore)
 query I
-select sum(bytes_from_mem) >= 0 from disk_cache_stats();
+select sum(bytes_from_mem) >= 0 from diskcache_stats();
 ----
 1
 
 statement ok
-from disk_cache_config(1024, '.disk_cache2/', 1);
+from diskcache_config(1024, '.diskcache2/', 1);
 
 # Directory changed, so cache should be cleared
 query I
-select count(*) from disk_cache_stats();
+select count(*) from diskcache_stats();
 ----
 0
 
 query IIIIII
-select * replace(substr(cache_path,0,13) as cache_path) from disk_cache_config();
+select * replace(substr(cache_path,0,12) as cache_path) from diskcache_config();
 ----
-1024	.disk_cache2	0	1	(empty)	1
+1024	.diskcache2	0	1	(empty)	1
 
 # we function better if the file cache is off (we then memcache ourselves). But after the first query there should ne no reuse yet 
 statement ok
@@ -94,7 +94,7 @@ select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
 # bytes_from_mem will be 0 (first query)
 query I
-select sum(bytes_from_mem) = 0 from disk_cache_stats();
+select sum(bytes_from_mem) = 0 from diskcache_stats();
 ----
 1
 
@@ -103,7 +103,7 @@ select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
 # bytes_from_mem will be > 0 now
 query I
-select sum(bytes_from_mem) = 0 from disk_cache_stats();
+select sum(bytes_from_mem) = 0 from diskcache_stats();
 ----
 0
 
@@ -114,16 +114,15 @@ select message from duckdb_logs where log_level = 'ERROR';
 
 statement ok
 create or replace table hydrate as
-(select uri, range_start, range_size from disk_cache_stats() order by all);
+(select uri, range_start, range_size from diskcache_stats() order by all);
 
 statement ok
-from disk_cache_config(1024, '.disk_cache3/', 255);
+from diskcache_config(1024, '.diskcache3/', 255);
 
 query IIIIII
-select * replace(substr(cache_path,0,13) as cache_path) from disk_cache_config();
+select * replace(substr(cache_path,0,12) as cache_path) from diskcache_config();
 ----
-1024	.disk_cache3	0	255	(empty)	1
-
+1024	.diskcache3	0	255	(empty)	1
 
 statement ok
-select disk_cache_hydrate(uri, range_start, range_size) from hydrate;
+select diskcache_hydrate(uri, range_start, range_size) from hydrate;

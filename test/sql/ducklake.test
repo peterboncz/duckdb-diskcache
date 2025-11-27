@@ -1,10 +1,10 @@
 # name: test/sql/duck_lake.test
-# description: test disk_cache extension
+# description: test diskcache extension
 # group: [sql]
 
 require parquet
 
-require disk_cache
+require diskcache
 
 statement ok
 install httpfs
@@ -33,7 +33,7 @@ select max(range) from my_ducklake.tst;
 
 # we should get caching
 query III
-select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from disk_cache_stats() where uri like '%.parquet';
+select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from diskcache_stats() where uri like '%.parquet';
 ----
 19	19	4
 
@@ -42,7 +42,7 @@ select max(range) from my_ducklake.tst;
 
 # we should get more caching
 query III
-select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from disk_cache_stats() where uri like '%.parquet';
+select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from diskcache_stats() where uri like '%.parquet';
 ----
 19	38	8
 
@@ -53,7 +53,7 @@ statement ok
 select max(range) from my_ducklake.tst;
 
 query III
-select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from disk_cache_stats() where uri like '%.parquet';
+select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from diskcache_stats() where uri like '%.parquet';
 ----
 19	57	8
 
@@ -61,6 +61,6 @@ statement ok
 select max(range) from my_ducklake.tst;
 
 query III
-select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from disk_cache_stats() where uri like '%.parquet';
+select count(*), sum(usage_count), cast(sum(bytes_from_mem)/1000000 as int) from diskcache_stats() where uri like '%.parquet';
 ----
 19	57	8

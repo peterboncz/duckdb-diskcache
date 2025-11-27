@@ -1,17 +1,17 @@
-#include "include/disk_cache.hpp"
+#include "include/diskcache.hpp"
 #include "duckdb/common/opener_file_system.hpp"
 #include "duckdb/main/config.hpp"
 
 namespace duckdb {
 
-DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &uri, idx_t pos, idx_t &len) {
-	DiskCacheEntry *disk_cache_entry = cache.FindEntry(uri);
-	if (!disk_cache_entry || disk_cache_entry->ranges.empty()) {
+DiskcacheFileRange *AnalyzeRange(Diskcache &cache, const string &uri, idx_t pos, idx_t &len) {
+	DiskcacheEntry *diskcache_entry = cache.FindEntry(uri);
+	if (!diskcache_entry || diskcache_entry->ranges.empty()) {
 		return nullptr;
 	}
-	auto it = disk_cache_entry->ranges.upper_bound(pos);
-	DiskCacheFileRange *hit_range = nullptr;
-	if (it != disk_cache_entry->ranges.begin()) {
+	auto it = diskcache_entry->ranges.upper_bound(pos);
+	DiskcacheFileRange *hit_range = nullptr;
+	if (it != diskcache_entry->ranges.begin()) {
 		auto prev_it = std::prev(it);
 		auto &prev_range = prev_it->second;
 		if (prev_range && prev_range->range_end > pos) {
@@ -19,7 +19,7 @@ DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &uri, idx_t pos,
 		}
 	}
 	// Check the next range to see if we need to reduce 'len' (to avoid reading data that we already cached)
-	if (it != disk_cache_entry->ranges.end() && it->second) {
+	if (it != diskcache_entry->ranges.end() && it->second) {
 		if (it->second->range_start < pos + len) {
 			len = it->second->range_start - pos;
 		}
@@ -27,11 +27,11 @@ DiskCacheFileRange *AnalyzeRange(DiskCache &cache, const string &uri, idx_t pos,
 	return hit_range;
 }
 
-idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *buf) {
-	DiskCacheFileRange *hit_range = nullptr;
+idx_t Diskcache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *buf) {
+	DiskcacheFileRange *hit_range = nullptr;
 	idx_t orig_len = len, off = pos, hit_size = 0;
 
-	std::unique_lock<std::mutex> lock(disk_cache_mutex);
+	std::unique_lock<std::mutex> lock(diskcache_mutex);
 	hit_range = AnalyzeRange(*this, uri, off, len); // may adjust len downward to match a next cached range
 	if (hit_range) {
 		hit_size = std::min(orig_len, hit_range->range_end - pos);
@@ -67,10 +67,10 @@ idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 	}
 	if (bytes_from_mem > 0) { // Update bytes_from_mem counter if we had a memory hit
 		lock.lock();
-		auto disk_cache_entry = FindEntry(uri);
-		if (disk_cache_entry) {
-			auto range_it = disk_cache_entry->ranges.find(range_start);
-			if (range_it != disk_cache_entry->ranges.end()) {
+		auto diskcache_entry = FindEntry(uri);
+		if (diskcache_entry) {
+			auto range_it = diskcache_entry->ranges.find(range_start);
+			if (range_it != diskcache_entry->ranges.end()) {
 				range_it->second->bytes_from_mem += bytes_from_mem;
 			}
 		}
@@ -79,9 +79,9 @@ idx_t DiskCache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 	return hit_size;
 }
 
-// we had to read from the original source (e.g. S3). Now try to cache this buffer in the disk-based disk_cache
-void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) {
-	if (!disk_cache_initialized || len == 0 || len > total_cache_capacity) {
+// we had to read from the original source (e.g. S3). Now try to cache this buffer in the disk-based diskcache
+void Diskcache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) {
+	if (!diskcache_initialized || len == 0 || len > total_cache_capacity) {
 		return; // bail out if non initialized or impossible length
 	}
 	std::lock_guard<std::mutex> lock(regex_mutex);
@@ -115,8 +115,8 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	idx_t file_id = ++current_file_id;
 	write_buffer->file_path = GenCacheFilePath(file_id, uri, range_start, final_size);
 
-	// Create a new DiskCacheFileRange with unique ownership
-	auto new_range = make_uniq<DiskCacheFileRange>(range_start, range_end, write_buffer);
+	// Create a new DiskcacheFileRange with unique ownership
+	auto new_range = make_uniq<DiskcacheFileRange>(range_start, range_end, write_buffer);
 	auto *range_ptr = new_range.get();
 	cache_entry->ranges[range_start] = std::move(new_range);
 
@@ -126,7 +126,7 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	nr_ranges++;
 
 	// Schedule the disk write
-	DiskCacheWriteJob job;
+	DiskcacheWriteJob job;
 	job.write_buf = write_buffer;
 	job.uri = uri;
 	job.file_id = file_id;
@@ -137,7 +137,7 @@ void DiskCache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 // Memory cache helpers
 //===----------------------------------------------------------------------===//
 
-void DiskCache::InsertRangeIntoMemcache(const string &file, idx_t range_start, BufferHandle &handle, idx_t len) {
+void Diskcache::InsertRangeIntoMemcache(const string &file, idx_t range_start, BufferHandle &handle, idx_t len) {
 	auto &memcache_file = blobfile_memcache->GetOrCreateCachedFile(file);
 	auto memcache_range =
 	    make_shared_ptr<ExternalFileCache::CachedFileRange>(handle.GetBlockHandle(), len, range_start, "");
@@ -148,7 +148,7 @@ void DiskCache::InsertRangeIntoMemcache(const string &file, idx_t range_start, B
 	         std::to_string(range_start) + " length " + std::to_string(len));
 }
 
-bool DiskCache::TryReadFromMemcache(const string &file, idx_t range_start, void *buf, idx_t &len) {
+bool Diskcache::TryReadFromMemcache(const string &file, idx_t range_start, void *buf, idx_t &len) {
 	if (!blobfile_memcache) {
 		return false;
 	}
@@ -183,7 +183,7 @@ bool DiskCache::TryReadFromMemcache(const string &file, idx_t range_start, void 
 // Multi-threaded background cache writer implementation
 //===----------------------------------------------------------------------===//
 
-void DiskCache::QueueIOWrite(DiskCacheWriteJob &job, idx_t partition) {
+void Diskcache::QueueIOWrite(DiskcacheWriteJob &job, idx_t partition) {
 	{
 		std::lock_guard<std::mutex> lock(io_mutexes[partition]);
 		write_queues[partition].emplace(std::move(job));
@@ -191,7 +191,7 @@ void DiskCache::QueueIOWrite(DiskCacheWriteJob &job, idx_t partition) {
 	io_cvs[partition].notify_one();
 }
 
-void DiskCache::QueueIORead(DiskCacheReadJob &job) {
+void Diskcache::QueueIORead(DiskcacheReadJob &job) {
 	// Hash-based partitioning by URI to ensure same file goes to same thread
 	hash_t uri_hash = Hash(string_t(job.uri.c_str(), static_cast<uint32_t>(job.uri.length())));
 	idx_t target_thread = uri_hash % nr_io_threads;
@@ -202,7 +202,7 @@ void DiskCache::QueueIORead(DiskCacheReadJob &job) {
 	io_cvs[target_thread].notify_one();
 }
 
-void DiskCache::StartIOThreads(idx_t thread_count) {
+void Diskcache::StartIOThreads(idx_t thread_count) {
 	if (thread_count > MAX_IO_THREADS) {
 		thread_count = MAX_IO_THREADS;
 		LogDebug("StartIOThreads: limiting IO threads to maximum allowed: " + std::to_string(MAX_IO_THREADS));
@@ -210,14 +210,14 @@ void DiskCache::StartIOThreads(idx_t thread_count) {
 	shutdown_io_threads = false;
 	nr_io_threads = thread_count;
 
-	LogDebug("StartIOThreads: starting " + std::to_string(nr_io_threads) + " disk_cache IO threads");
+	LogDebug("StartIOThreads: starting " + std::to_string(nr_io_threads) + " diskcache IO threads");
 
 	for (idx_t i = 0; i < nr_io_threads; i++) {
 		io_threads[i] = std::thread([this, i] { MainIOThreadLoop(i); });
 	}
 }
 
-void DiskCache::StopIOThreads() {
+void Diskcache::StopIOThreads() {
 	if (nr_io_threads == 0) {
 		return; // Skip if no threads are running
 	}
@@ -238,13 +238,13 @@ void DiskCache::StopIOThreads() {
 		}
 	}
 	// Only log if not shutting down
-	if (!disk_cache_shutting_down) {
+	if (!diskcache_shutting_down) {
 		LogDebug("StopIOThreads: stopped " + std::to_string(nr_io_threads) + " cache writer threads");
 	}
 	nr_io_threads = 0; // Reset thread count
 }
 
-void DiskCache::ProcessWriteJob(DiskCacheWriteJob &job) {
+void Diskcache::ProcessWriteJob(DiskcacheWriteJob &job) {
 	EnsureDirectoryExists(job.file_id);        // first ensure there is directory to write the file into
 	if (job.write_buf->nr_bytes == CANCELED) { // Check if write was canceled before we started
 		LogDebug("ProcessWriteJob: write was canceled before starting, skipping");
@@ -267,7 +267,7 @@ void DiskCache::ProcessWriteJob(DiskCacheWriteJob &job) {
 	}
 }
 
-void DiskCache::ProcessReadJob(DiskCacheReadJob &job) {
+void Diskcache::ProcessReadJob(DiskcacheReadJob &job) {
 	try {
 		// Open file and allocate buffer
 		auto &fs = FileSystem::GetFileSystem(*db_instance);
@@ -285,7 +285,7 @@ void DiskCache::ProcessReadJob(DiskCacheReadJob &job) {
 	}
 }
 
-void DiskCache::MainIOThreadLoop(idx_t thread_id) {
+void Diskcache::MainIOThreadLoop(idx_t thread_id) {
 	LogDebug("MainIOThreadLoop " + std::to_string(thread_id) + " started");
 	while (!shutdown_io_threads) {
 		std::unique_lock<std::mutex> lock(io_mutexes[thread_id]);
@@ -309,19 +309,19 @@ void DiskCache::MainIOThreadLoop(idx_t thread_id) {
 		}
 	}
 	// Only log thread shutdown if not during database shutdown to avoid access to destroyed instance
-	if (!disk_cache_shutting_down) {
+	if (!diskcache_shutting_down) {
 		LogDebug("MainIOThreadLoop " + std::to_string(thread_id) + " stopped");
 	}
 }
 
 //===----------------------------------------------------------------------===//
-// DiskCache - evict a complete file (i.e. it entry and all its ranges)
+// Diskcache - evict a complete file (i.e. it entry and all its ranges)
 //===----------------------------------------------------------------------===//
-void DiskCache::EvictEntry(const string &uri) {
-	if (!disk_cache_initialized) {
+void Diskcache::EvictEntry(const string &uri) {
+	if (!diskcache_initialized) {
 		return;
 	}
-	std::lock_guard<std::mutex> lock(disk_cache_mutex);
+	std::lock_guard<std::mutex> lock(diskcache_mutex);
 	auto map_key = StringUtil::Lower(uri);
 	auto it = key_cache->find(map_key);
 	if (it == key_cache->end()) {
@@ -336,8 +336,8 @@ void DiskCache::EvictEntry(const string &uri) {
 }
 
 // Evict ranges (not entries) until the target is met
-bool DiskCache::EvictToCapacity(idx_t new_range_size) {
-	// Note: This is called with disk_cache_mutex already held
+bool Diskcache::EvictToCapacity(idx_t new_range_size) {
+	// Note: This is called with diskcache_mutex already held
 	if (current_cache_size + new_range_size <= total_cache_capacity) {
 		return true; // No eviction needed
 	}
@@ -384,15 +384,15 @@ bool DiskCache::EvictToCapacity(idx_t new_range_size) {
 	return true;
 }
 
-vector<DiskCacheRangeInfo> DiskCache::GetStatistics() const { // produce list of cached ranges for disk_cache_stats() TF
-	std::lock_guard<std::mutex> lock(disk_cache_mutex);
-	vector<DiskCacheRangeInfo> result;
+vector<DiskcacheRangeInfo> Diskcache::GetStatistics() const { // produce list of cached ranges for diskcache_stats() TF
+	std::lock_guard<std::mutex> lock(diskcache_mutex);
+	vector<DiskcacheRangeInfo> result;
 	result.reserve(nr_ranges);
 
 	// Iterate through all CacheEntries - no stale checking needed since ranges are deleted immediately
 	for (const auto &cache_pair : *key_cache) {
 		const auto &cache_entry = cache_pair.second;
-		DiskCacheRangeInfo info;
+		DiskcacheRangeInfo info;
 		info.uri = cache_entry->uri; // Keep full URI with protocol intact
 		for (const auto &range_pair : cache_entry->ranges) {
 			info.file = range_pair.second->write_buf->file_path;
@@ -408,10 +408,10 @@ vector<DiskCacheRangeInfo> DiskCache::GetStatistics() const { // produce list of
 }
 
 //===----------------------------------------------------------------------===//
-// DiskCache file management
+// Diskcache file management
 //===----------------------------------------------------------------------===//
 
-unique_ptr<FileHandle> DiskCache::TryOpenCacheFile(const string &file) {
+unique_ptr<FileHandle> Diskcache::TryOpenCacheFile(const string &file) {
 	if (!db_instance) {
 		return nullptr;
 	}
@@ -425,7 +425,7 @@ unique_ptr<FileHandle> DiskCache::TryOpenCacheFile(const string &file) {
 	}
 }
 
-idx_t DiskCache::ReadFromCacheFile(const string &file, void *buffer, idx_t length, idx_t offset) {
+idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t length, idx_t offset) {
 	// Check if we should use our memcache (only if DuckDB's external cache is disabled)
 	auto &config = DBConfig::GetConfig(*db_instance);
 	bool use_memcache = !config.options.enable_external_file_cache;
@@ -470,7 +470,7 @@ idx_t DiskCache::ReadFromCacheFile(const string &file, void *buffer, idx_t lengt
 	return 0; // All bytes from disk
 }
 
-bool DiskCache::WriteToCacheFile(const string &file, const void *buffer, idx_t length) {
+bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t length) {
 	if (!db_instance) {
 		return false;
 	}
@@ -498,7 +498,7 @@ bool DiskCache::WriteToCacheFile(const string &file, const void *buffer, idx_t l
 	return true;
 }
 
-bool DiskCache::DeleteCacheFile(const string &file) {
+bool Diskcache::DeleteCacheFile(const string &file) {
 	if (!db_instance)
 		return false;
 	try {
@@ -515,7 +515,7 @@ bool DiskCache::DeleteCacheFile(const string &file) {
 //===----------------------------------------------------------------------===//
 // Directory management
 //===----------------------------------------------------------------------===//
-void DiskCache::EnsureDirectoryExists(idx_t file_id) {
+void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 	// Derive directory structure from file_id (1M combinations: 4096 * 256)
 	idx_t xxx = (file_id / 256) % 4096;
 	idx_t yy = file_id % 256;
@@ -534,7 +534,7 @@ void DiskCache::EnsureDirectoryExists(idx_t file_id) {
 	xxx_stream << std::setfill('0') << std::setw(3) << std::hex << xxx;
 	yy_stream << std::setfill('0') << std::setw(2) << std::hex << yy;
 
-	auto dir = disk_cache_dir + xxx_stream.str();
+	auto dir = diskcache_dir + xxx_stream.str();
 	try {
 		auto &fs = FileSystem::GetFileSystem(*db_instance);
 		if (!fs.DirectoryExists(dir)) {
@@ -552,22 +552,22 @@ void DiskCache::EnsureDirectoryExists(idx_t file_id) {
 }
 
 //===----------------------------------------------------------------------===//
-// DiskCache (re-) configuration
+// Diskcache (re-) configuration
 //===----------------------------------------------------------------------===//
 
-void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx_t max_io_threads) {
-	std::lock_guard<std::mutex> lock(disk_cache_mutex);
-	if (!disk_cache_initialized) {
-		disk_cache_dir = base_dir;
+void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx_t max_io_threads) {
+	std::lock_guard<std::mutex> lock(diskcache_mutex);
+	if (!diskcache_initialized) {
+		diskcache_dir = base_dir;
 		total_cache_capacity = max_size_bytes;
 
-		LogDebug("ConfigureCache: initializing cache: directory='" + disk_cache_dir + "' max_size=" +
+		LogDebug("ConfigureCache: initializing cache: directory='" + diskcache_dir + "' max_size=" +
 		         std::to_string(total_cache_capacity) + " bytes io_threads=" + std::to_string(max_io_threads));
 		if (!InitCacheDir()) {
-			LogError("ConfigureCache: initializing cache directory='" + disk_cache_dir + "' failed");
+			LogError("ConfigureCache: initializing cache directory='" + diskcache_dir + "' failed");
 		}
 		Clear();
-		disk_cache_initialized = true;
+		diskcache_initialized = true;
 		// Initialize our own ExternalFileCache instance (always, but only used when DuckDB's is disabled)
 		blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
 		LogDebug("ConfigureCache: initialized blobfile_memcache for memory caching of disk-cached files");
@@ -576,7 +576,7 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 	}
 	// Cache already initialized, check what needs to be changed
 	bool need_restart_threads = (nr_io_threads != max_io_threads);
-	bool directory_changed = (disk_cache_dir != base_dir);
+	bool directory_changed = (diskcache_dir != base_dir);
 	bool size_reduced = (max_size_bytes < total_cache_capacity);
 	bool size_changed = (total_cache_capacity != max_size_bytes);
 	if (!directory_changed && !need_restart_threads && !size_changed) {
@@ -585,7 +585,7 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 	}
 
 	// Stop existing threads if we need to change thread count or directory
-	LogDebug("ConfigureCache: old_dir='" + disk_cache_dir + "' new_dir='" + base_dir +
+	LogDebug("ConfigureCache: old_dir='" + diskcache_dir + "' new_dir='" + base_dir +
 	         "' old_size=" + std::to_string(total_cache_capacity) + " new_size=" + std::to_string(max_size_bytes) +
 	         " old_threads=" + std::to_string(nr_io_threads) + " new_threads=" + std::to_string(max_io_threads));
 	if (nr_io_threads > 0 && (need_restart_threads || directory_changed)) {
@@ -597,11 +597,11 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 		LogDebug("ConfigureCache: directory changed, clearing cache");
 		Clear();
 		if (!CleanCacheDir()) { // Clean old directory before switching
-			LogError("ConfigureCache: cleaning cache directory='" + disk_cache_dir + "' failed");
+			LogError("ConfigureCache: cleaning cache directory='" + diskcache_dir + "' failed");
 		}
-		disk_cache_dir = base_dir;
+		diskcache_dir = base_dir;
 		if (!InitCacheDir()) {
-			LogError("ConfigureCache: initializing cache directory='" + disk_cache_dir + "' failed");
+			LogError("ConfigureCache: initializing cache directory='" + diskcache_dir + "' failed");
 		}
 		// Reinitialize blobfile_memcache when directory changes
 		blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
@@ -619,14 +619,14 @@ void DiskCache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 	if (need_restart_threads || directory_changed) {
 		StartIOThreads(max_io_threads);
 	}
-	LogDebug("ConfigureCache complete: directory='" + disk_cache_dir + "' max_size=" + to_string(total_cache_capacity) +
+	LogDebug("ConfigureCache complete: directory='" + diskcache_dir + "' max_size=" + to_string(total_cache_capacity) +
 	         " bytes io_threads=" + to_string(nr_io_threads));
 }
 
 //===----------------------------------------------------------------------===//
 // unsafe caching policy based on regexps (non-default)
 //===----------------------------------------------------------------------===//
-void DiskCache::UpdateRegexPatterns(const string &regex_patterns_str) {
+void Diskcache::UpdateRegexPatterns(const string &regex_patterns_str) {
 	std::lock_guard<std::mutex> lock(regex_mutex);
 
 	// Store the original regex patterns string for later retrieval
@@ -653,8 +653,8 @@ void DiskCache::UpdateRegexPatterns(const string &regex_patterns_str) {
 	LogDebug("UpdateRegexPatterns: now using " + std::to_string(cached_regexps.size()) + " regex patterns");
 }
 
-bool DiskCache::CacheUnsafely(const string &uri) const {
-	if (!StringUtil::StartsWith(uri, disk_cache_dir)) { // never cache own files
+bool Diskcache::CacheUnsafely(const string &uri) const {
+	if (!StringUtil::StartsWith(uri, diskcache_dir)) { // never cache own files
 		std::lock_guard<std::mutex> lock(regex_mutex);
 		if (!cached_regexps.empty()) { // empty is default!
 			// the regexps allow unsafe caching (without worrying about etags/modified times): blindly cache
@@ -669,13 +669,13 @@ bool DiskCache::CacheUnsafely(const string &uri) const {
 }
 
 //===----------------------------------------------------------------------===//
-// DiskCache - configuration and utility methods
+// Diskcache - configuration and utility methods
 //===----------------------------------------------------------------------===//
-bool DiskCache::CleanCacheDir() {
+bool Diskcache::CleanCacheDir() {
 	if (!db_instance)
 		return false;
 	auto &fs = FileSystem::GetFileSystem(*db_instance);
-	if (!fs.DirectoryExists(disk_cache_dir)) {
+	if (!fs.DirectoryExists(diskcache_dir)) {
 		return true; // Directory doesn't exist, nothing to clean
 	}
 	auto success = true;
@@ -710,23 +710,23 @@ bool DiskCache::CleanCacheDir() {
 			success = false;
 		}
 	};
-	// Clean the disk_cache directory recursively
+	// Clean the diskcache directory recursively
 	try {
-		remove_dir_contents(disk_cache_dir);
+		remove_dir_contents(diskcache_dir);
 	} catch (const std::exception &) {
 		success = false;
 	}
 	return success;
 }
 
-bool DiskCache::InitCacheDir() {
+bool Diskcache::InitCacheDir() {
 	if (!db_instance) {
 		return false;
 	}
 	auto &fs = FileSystem::GetFileSystem(*db_instance);
-	if (!fs.DirectoryExists(disk_cache_dir)) {
+	if (!fs.DirectoryExists(diskcache_dir)) {
 		try {
-			fs.CreateDirectory(disk_cache_dir);
+			fs.CreateDirectory(diskcache_dir);
 		} catch (const std::exception &e) {
 			LogError("Failed to create cache directory: " + string(e.what()));
 			return false;
