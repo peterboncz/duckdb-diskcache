@@ -14,7 +14,7 @@ There is the possibility (off by default) to use **DiskCache** more agressively,
 You can configure **DiskCache** with:
 
 ```sql
-FROM disk_cache_config(directory, max_size_mb, nr_io_threads, regexps="");
+FROM diskcache_config(directory, max_size_mb, nr_io_threads, regexps="");
 ```
 
 You can inspect the configuration by invoking it without parameters. You can reconfigure an existing cache by changing all parameters except the directory. If you change the directory (where the cached file ranges are stored), then the cache gets cleared. The `regexps` parameter contains semicolon-separated regexps that allow more aggressive caching: they will cache any URL that matches one of the regexps. Note that in this case, such caching of files purely based on their name may result in stale data being returned/
@@ -22,7 +22,7 @@ You can inspect the configuration by invoking it without parameters. You can rec
 The current contents of the cache can be queried with:
 
 ```sql
-FROM disk_cache_stats();
+FROM diskcache_stats();
 ```
 
 It lists the cache contents in reverse LRU order (hottest ranges first). One possible usage of this table function could be to store the (leading) part of these ranges in a DuckDB table:
@@ -30,18 +30,18 @@ It lists the cache contents in reverse LRU order (hottest ranges first). One pos
 ```sql
 CREATE OR REPLACE TABLE hydrate AS
 SELECT uri, range_start, range_size
-FROM disk_cache_stats()
+FROM diskcache_stats()
 ORDER BY ALL;
 ```
 The above could be executed when shutting down DuckDB. When you restart DuckDB later, potentially on another machine, you can quickly hydrate **DiskCache**:
 
 
 ```sql
-SELECT disk_cache_hydrate(uri, range_start, range_size) FROM hydrate;
+SELECT diskcache_hydrate(uri, range_start, range_size) FROM hydrate;
 ```
 
-**DiskCache** provides a `disk_cache_hydrate(URL, start, size)` scalar function that uses *massively parallel I/O* to read and cache URI ranges. Please order the URL,start such that adjacent requests can be combined.
-The `disk_cache_hydrate()` function uses many I/O threads (see: `disk_cache_config`) for doing parallel I/O requests. Doing so is necessary in *cloud instances* to get near the maximum network bandwidth, and allows for quick hydration of the smart cache from a previous state.
+**DiskCache** provides a `diskcache_hydrate(URL, start, size)` scalar function that uses *massively parallel I/O* to read and cache URI ranges. Please order the URL,start such that adjacent requests can be combined.
+The `diskcache_hydrate()` function uses many I/O threads (see: `diskcache_config`) for doing parallel I/O requests. Doing so is necessary in *cloud instances* to get near the maximum network bandwidth, and allows for quick hydration of the smart cache from a previous state.
 
 **DiskCache** supports a "fake-S3" `fake_s3://X` filesystem  which acts like S3 but directs to the local filesystem, while adding *fake network latencies* similar to S3 latencies (best-case "inside the same AZ"). This is a handy tool for local performance debugging without having to spin up an EC2 instance. One could e.g. create a SF100 tpch database and generate parquet files e.g., using:
 ```sql
