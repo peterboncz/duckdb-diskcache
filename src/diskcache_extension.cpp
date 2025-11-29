@@ -411,16 +411,12 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	diskcache_config_function.init_global = DiskcacheConfigInitGlobal;
 	diskcache_config_function.varargs = LogicalType::ANY; // Allow variable arguments
 	loader.RegisterFunction(diskcache_config_function);
-	diskcache_config_function.name = "diskcache_config_md_remote";
-	loader.RegisterFunction(diskcache_config_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_config function");
 
 	// Register diskcache_stats table function
 	TableFunction diskcache_stats_function("diskcache_stats", {}, DiskcacheStatsFunction);
 	diskcache_stats_function.bind = DiskcacheStatsBind;
 	diskcache_stats_function.init_global = DiskcacheStatsInitGlobal;
-	loader.RegisterFunction(diskcache_stats_function);
-	diskcache_stats_function.name = "diskcache_stats_md_remote";
 	loader.RegisterFunction(diskcache_stats_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_stats function");
 
@@ -429,8 +425,6 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	                                          {LogicalType::VARCHAR, LogicalType::BIGINT, LogicalType::BIGINT},
 	                                          LogicalType::BOOLEAN, DiskcacheHydrateFunction);
 	diskcache_hydrate_function.bind = DiskcacheHydrateBind;
-	loader.RegisterFunction(diskcache_hydrate_function);
-	diskcache_hydrate_function.name = "diskcache_hydrate_md_remote";
 	loader.RegisterFunction(diskcache_hydrate_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_hydrate function");
 
