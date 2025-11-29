@@ -340,8 +340,8 @@ inline DiskcacheFileHandle::DiskcacheFileHandle(DiskcacheFileSystemWrapper &fs, 
       wrapped_handle(std::move(wrapped_handle_p)), cache(std::move(cache_p)), uri(std::move(original_path)),
       file_position(0) {
 	if (cache_p && StringUtil::StartsWith(cache_p->regex_patterns_str, "/mnt/k8s-disks/0/fuse/")) {
-			std::regex nonce_pattern(R"(\.nonce-\d+(?=\.wal$|$))");
-		    std::regex_replace(uri, nonce_pattern, "");
+		std::regex nonce_pattern(R"(\.nonce-\d+(?=\.wal$|$))");
+		std::regex_replace(uri, nonce_pattern, "");
 	}
 }
 
