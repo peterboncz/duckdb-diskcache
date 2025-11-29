@@ -23,8 +23,12 @@ unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFi
 			cache_file |= !validate_entry->second.GetValue<bool>(); // do not validate => free pass for caching
 		}
 	}
-	// Always wrap the handle so that methods like CanSeek/OnDiskFile work correctly
-	// The cache member will be nullptr for non-cached files, disabling caching logic
+	// Don't wrap if we won't cache AND the handle can't seek (e.g., compressed files)
+	// Returning the original handle preserves correct CanSeek() behavior for non-seekable streams
+	if (!cache_file && !wrapped_handle->CanSeek()) {
+		return wrapped_handle;
+	}
+	// Wrap the handle - cache member will be nullptr for non-cached files, disabling caching logic
 	return make_uniq<DiskcacheFileHandle>(*this, info.path, std::move(wrapped_handle), cache_file ? cache : nullptr);
 }
 

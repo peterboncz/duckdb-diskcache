@@ -270,8 +270,12 @@ void Diskcache::ProcessWriteJob(DiskcacheWriteJob &job) {
 
 void Diskcache::ProcessReadJob(DiskcacheReadJob &job) {
 	try {
+		auto db = db_instance.lock();
+		if (!db) {
+			return; // Database is shutting down
+		}
 		// Open file and allocate buffer
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
 		auto buffer = unique_ptr<char[]>(new char[job.range_size]);
 
@@ -413,11 +417,12 @@ vector<DiskcacheRangeInfo> Diskcache::GetStatistics() const { // produce list of
 //===----------------------------------------------------------------------===//
 
 unique_ptr<FileHandle> Diskcache::TryOpenCacheFile(const string &file) {
-	if (!db_instance) {
+	auto db = db_instance.lock();
+	if (!db) {
 		return nullptr;
 	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		return fs.OpenFile(file, FileOpenFlags::FILE_FLAGS_READ);
 	} catch (const std::exception &e) {
 		// File was evicted between metadata check and open - this can legally happen
@@ -427,13 +432,17 @@ unique_ptr<FileHandle> Diskcache::TryOpenCacheFile(const string &file) {
 }
 
 idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &length, idx_t offset) {
+	auto db = db_instance.lock();
+	if (!db) {
+		return CANCELED;
+	}
 	// Check if we should use our memcache (only if DuckDB's external cache is disabled)
-	auto &config = DBConfig::GetConfig(*db_instance);
+	auto &config = DBConfig::GetConfig(*db);
 	bool use_memcache = !config.options.enable_external_file_cache;
 
 	// If external cache is enabled but we have data in memcache, clear it
 	if (!use_memcache && memcache_size > 0) {
-		blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
+		blobfile_memcache = make_uniq<ExternalFileCache>(*db, true);
 		memcache_size = 0;
 		LogDebug("ReadFromCacheFile: cleared memcache (DuckDB's external cache is now enabled)");
 	}
@@ -453,7 +462,7 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 	}
 	auto buffer_ptr = buffer_handle.Ptr();
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		fs.Read(*handle, buffer_ptr, length, offset); // Read from disk starting at offset 0
 	} catch (const std::exception &e) {
 		// File was evicted/deleted after opening but before reading - signal cache miss to fall back to original source
@@ -472,11 +481,12 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 }
 
 bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t length) {
-	if (!db_instance) {
+	auto db = db_instance.lock();
+	if (!db) {
 		return false;
 	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		auto flags = // Open file for writing in append mode (create if not exists)
 		    FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE | FileOpenFlags::FILE_FLAGS_APPEND;
 		auto handle = fs.OpenFile(file, flags);
@@ -500,10 +510,12 @@ bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t l
 }
 
 bool Diskcache::DeleteCacheFile(const string &file) {
-	if (!db_instance)
+	auto db = db_instance.lock();
+	if (!db) {
 		return false;
+	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		fs.RemoveFile(file);
 		LogDebug("DeleteCacheFile: deleted file '" + file + "'");
 		return true;
@@ -530,6 +542,11 @@ void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 		return;
 	}
 
+	auto db = db_instance.lock();
+	if (!db) {
+		return;
+	}
+
 	// Format directory names as 3-digit and 2-digit hex
 	std::ostringstream xxx_stream, yy_stream;
 	xxx_stream << std::setfill('0') << std::setw(3) << std::hex << xxx;
@@ -537,7 +554,7 @@ void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 
 	auto dir = diskcache_dir + xxx_stream.str();
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db_instance);
+		auto &fs = FileSystem::GetFileSystem(*db);
 		if (!fs.DirectoryExists(dir)) {
 			fs.CreateDirectory(dir);
 		}
@@ -558,6 +575,10 @@ void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 
 void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx_t max_io_threads) {
 	std::lock_guard<std::mutex> lock(diskcache_mutex);
+	auto db = db_instance.lock();
+	if (!db) {
+		return;
+	}
 	if (!diskcache_initialized) {
 		diskcache_dir = base_dir;
 		total_cache_capacity = max_size_bytes;
@@ -570,7 +591,7 @@ void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 		Clear();
 		diskcache_initialized = true;
 		// Initialize our own ExternalFileCache instance (always, but only used when DuckDB's is disabled)
-		blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
+		blobfile_memcache = make_uniq<ExternalFileCache>(*db, true);
 		LogDebug("ConfigureCache: initialized blobfile_memcache for memory caching of disk-cached files");
 		StartIOThreads(max_io_threads);
 		return;
@@ -605,7 +626,7 @@ void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 			LogError("ConfigureCache: initializing cache directory='" + diskcache_dir + "' failed");
 		}
 		// Reinitialize blobfile_memcache when directory changes
-		blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
+		blobfile_memcache = make_uniq<ExternalFileCache>(*db, true);
 		LogDebug("ConfigureCache: reinitialized blobfile_memcache after directory change");
 	}
 	// Same directory, just update capacity and evict if needed
@@ -673,9 +694,11 @@ bool Diskcache::CacheUnsafely(const string &uri) const {
 // Diskcache - configuration and utility methods
 //===----------------------------------------------------------------------===//
 bool Diskcache::CleanCacheDir() {
-	if (!db_instance)
+	auto db = db_instance.lock();
+	if (!db) {
 		return false;
-	auto &fs = FileSystem::GetFileSystem(*db_instance);
+	}
+	auto &fs = FileSystem::GetFileSystem(*db);
 	if (!fs.DirectoryExists(diskcache_dir)) {
 		return true; // Directory doesn't exist, nothing to clean
 	}
@@ -721,10 +744,11 @@ bool Diskcache::CleanCacheDir() {
 }
 
 bool Diskcache::InitCacheDir() {
-	if (!db_instance) {
+	auto db = db_instance.lock();
+	if (!db) {
 		return false;
 	}
-	auto &fs = FileSystem::GetFileSystem(*db_instance);
+	auto &fs = FileSystem::GetFileSystem(*db);
 	if (!fs.DirectoryExists(diskcache_dir)) {
 		try {
 			fs.CreateDirectory(diskcache_dir);

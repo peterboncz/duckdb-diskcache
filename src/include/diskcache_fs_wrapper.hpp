@@ -47,6 +47,9 @@ public:
 			wrapped_handle->Close();
 		}
 	}
+	bool CanSeek() {
+		return true; // We only wrap seekable handles (checked in OpenFileExtended)
+	}
 
 public:
 	unique_ptr<FileHandle> wrapped_handle;
@@ -165,7 +168,7 @@ public:
 		cache_handle.wrapped_handle->Sync();
 	}
 	bool CanSeek() override {
-		return true; // We support seeking - we track file position ourselves
+		return true; // We only wrap seekable handles (checked in OpenFileExtended)
 	}
 	bool OnDiskFile(FileHandle &handle) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();

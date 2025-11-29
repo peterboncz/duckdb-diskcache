@@ -90,7 +90,7 @@ struct Diskcache {
 	static constexpr idx_t URI_SUFFIX_LEN = 15;
 
 	// Configuration and state
-	shared_ptr<DatabaseInstance> db_instance;
+	weak_ptr<DatabaseInstance> db_instance;
 	bool diskcache_initialized = false, diskcache_shutting_down = false;
 	string path_sep;      // normally "/", but "\" on windows
 	string diskcache_dir; // where we store data temporarily
@@ -140,13 +140,21 @@ struct Diskcache {
 
 	// Logging methods
 	void LogDebug(const string &message) const {
-		if (db_instance && !diskcache_shutting_down) {
-			DUCKDB_LOG_DEBUG(*db_instance, "[Diskcache] %s", message.c_str());
+		if (diskcache_shutting_down) {
+			return;
+		}
+		auto db = db_instance.lock();
+		if (db) {
+			DUCKDB_LOG_DEBUG(*db, "[Diskcache] %s", message.c_str());
 		}
 	}
 	void LogError(const string &message) const {
-		if (db_instance && !diskcache_shutting_down) {
-			DUCKDB_LOG_ERROR(*db_instance, "[Diskcache] %s", message.c_str());
+		if (diskcache_shutting_down) {
+			return;
+		}
+		auto db = db_instance.lock();
+		if (db) {
+			DUCKDB_LOG_ERROR(*db, "[Diskcache] %s", message.c_str());
 		}
 	}
 
@@ -194,8 +202,9 @@ struct Diskcache {
 		key_cache->clear();
 		lru_head = lru_tail = nullptr;
 		current_cache_size = nr_ranges = 0;
-		if (blobfile_memcache) {
-			blobfile_memcache = make_uniq<ExternalFileCache>(*db_instance, true);
+		auto db = db_instance.lock();
+		if (blobfile_memcache && db) {
+			blobfile_memcache = make_uniq<ExternalFileCache>(*db, true);
 		}
 		memcache_size = 0;
 	}
