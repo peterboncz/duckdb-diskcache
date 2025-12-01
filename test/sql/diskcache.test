@@ -10,12 +10,6 @@ statement ok
 call enable_logging(level='debug');
 
 statement ok
-install httpfs
-
-statement ok
-load httpfs
-
-statement ok
 install tpch
 
 statement ok

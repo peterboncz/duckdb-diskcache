@@ -7,6 +7,8 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/parser/parsed_data/create_scalar_function_info.hpp"
 #include "duckdb/parser/parsed_data/create_table_function_info.hpp"
+#include "duckdb/common/serializer/serializer.hpp"
+#include "duckdb/common/serializer/deserializer.hpp"
 
 namespace duckdb {
 
@@ -34,6 +36,40 @@ struct DiskcacheConfigBindData : public FunctionData {
 		return max_size_mb == other.max_size_mb && directory == other.directory &&
 		       nr_io_threads == other.nr_io_threads && regex_patterns == other.regex_patterns &&
 		       query_only == other.query_only;
+	}
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, TableFunction &function) {
+		auto max_size_mb = deserializer.ReadProperty<idx_t>(100, "max_size_mb");
+		auto directory = deserializer.ReadProperty<string>(101, "directory");
+		auto nr_io_threads = deserializer.ReadProperty<idx_t>(102, "nr_io_threads");
+		auto regex_patterns = deserializer.ReadProperty<string>(103, "regex_patterns");
+		auto query_only = deserializer.ReadProperty<bool>(104, "query_only");
+		return make_uniq<DiskcacheConfigBindData>(max_size_mb, std::move(directory), nr_io_threads,
+		                                          std::move(regex_patterns), query_only);
+	}
+	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data_p,
+	                      const TableFunction &function) {
+		auto &bind_data = bind_data_p->Cast<DiskcacheConfigBindData>();
+		serializer.WriteProperty(100, "max_size_mb", bind_data.max_size_mb);
+		serializer.WriteProperty(101, "directory", bind_data.directory);
+		serializer.WriteProperty(102, "nr_io_threads", bind_data.nr_io_threads);
+		serializer.WriteProperty(103, "regex_patterns", bind_data.regex_patterns);
+		serializer.WriteProperty(104, "query_only", bind_data.query_only);
+	}
+};
+
+// Empty bind data for diskcache_stats - needed for MotherDuck remote execution serialization
+struct DiskcacheStatsBindData : public TableFunctionData {
+	unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<DiskcacheStatsBindData>();
+	}
+	bool Equals(const FunctionData &other) const override {
+		return true;
+	}
+	static void Serialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,
+	                      const TableFunction &function) {
+	}
+	static unique_ptr<FunctionData> Deserialize(Deserializer &deserializer, TableFunction &function) {
+		return make_uniq<DiskcacheStatsBindData>();
 	}
 };
 
@@ -159,7 +195,7 @@ static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, Table
 	names.push_back("bytes_from_cache");
 	names.push_back("bytes_from_mem");
 
-	return nullptr; // No bind data needed for stats function
+	return make_uniq<DiskcacheStatsBindData>();
 }
 
 // diskcache_config(directory, max_size_mb, nr_io_threads) - Configure the blob cache
@@ -410,6 +446,8 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	diskcache_config_function.bind = DiskcacheConfigBind;
 	diskcache_config_function.init_global = DiskcacheConfigInitGlobal;
 	diskcache_config_function.varargs = LogicalType::ANY; // Allow variable arguments
+	diskcache_config_function.serialize = DiskcacheConfigBindData::Serialize;
+	diskcache_config_function.deserialize = DiskcacheConfigBindData::Deserialize;
 	loader.RegisterFunction(diskcache_config_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_config function");
 
@@ -417,6 +455,8 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	TableFunction diskcache_stats_function("diskcache_stats", {}, DiskcacheStatsFunction);
 	diskcache_stats_function.bind = DiskcacheStatsBind;
 	diskcache_stats_function.init_global = DiskcacheStatsInitGlobal;
+	diskcache_stats_function.serialize = DiskcacheStatsBindData::Serialize;
+	diskcache_stats_function.deserialize = DiskcacheStatsBindData::Deserialize;
 	loader.RegisterFunction(diskcache_stats_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_stats function");
 

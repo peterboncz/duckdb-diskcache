@@ -34,7 +34,6 @@ unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFi
 static idx_t ReadChunk(duckdb::FileSystem &wrapped_fs, DiskcacheFileHandle &handle, char *buf, idx_t location,
                        idx_t len) {
 	// NOTE: ReadFromCache() can return cached_bytes == 0 but adjust max_nr_bytes downwards to align with a cached range
-	idx_t orig_len = len;
 	handle.cache->LogDebug("ReadChunk(path=" + handle.uri + ", location=" + to_string(location) +
 	                       ", max_nr_bytes=" + to_string(len) + ")");
 	idx_t nr_cached = handle.cache->ReadFromCache(handle.uri, location, len, buf);

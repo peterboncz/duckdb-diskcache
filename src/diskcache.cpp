@@ -82,8 +82,8 @@ idx_t Diskcache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 
 // we had to read from the original source (e.g. S3). Now try to cache this buffer in the disk-based diskcache
 void Diskcache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) {
-	if (!diskcache_initialized || len == 0 || len > total_cache_capacity) {
-		return; // bail out if non initialized or impossible length
+	if (!diskcache_initialized || diskcache_shutting_down || len == 0 || len > total_cache_capacity) {
+		return; // bail out if non initialized, shutting down, or impossible length
 	}
 	std::lock_guard<std::mutex> lock(regex_mutex);
 	auto cache_entry = UpsertEntry(uri);

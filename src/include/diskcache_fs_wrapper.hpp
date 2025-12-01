@@ -29,7 +29,12 @@ public:
 	static string ObjectType() {
 		return "Diskcache";
 	}
-	~DiskcacheObjectCacheEntry() override = default;
+	~DiskcacheObjectCacheEntry() override {
+		// Mark cache as shutting down early to prevent new insertions during checkpoint
+		if (cache) {
+			cache->diskcache_shutting_down = true;
+		}
+	}
 };
 
 //===----------------------------------------------------------------------===//
@@ -149,7 +154,7 @@ public:
 	// simple pass-through wrappers around all other methods
 	int64_t GetFileSize(FileHandle &handle) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
-		return cache_handle.wrapped_handle->GetFileSize();
+		return (int64_t)cache_handle.wrapped_handle->GetFileSize();
 	}
 	timestamp_t GetLastModifiedTime(FileHandle &handle) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
