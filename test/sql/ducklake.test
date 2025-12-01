@@ -6,12 +6,6 @@ require parquet
 
 require diskcache
 
-statement ok
-install httpfs
-
-statement ok
-load httpfs
-
 # take ducklake for a spin
 statement ok
 install ducklake
