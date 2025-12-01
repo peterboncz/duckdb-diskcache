@@ -29,6 +29,7 @@ jobs:
       duckdb_version: v1.4.1
       ci_tools_version: v1.4.1
       extension_name: diskcache
+      exclude_archs: 'windows_amd64_mingw'
 
   code-quality-check:
     name: Code Quality Check
