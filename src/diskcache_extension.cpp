@@ -200,6 +200,21 @@ static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, Table
 	return make_uniq<DiskcacheStatsBindData>();
 }
 
+// Helper to enforce enable_external_file_cache = false in md_mode
+static void EnforceMdModeSettings(ClientContext &context, Diskcache &cache) {
+	if (!cache.md_mode) {
+		return;
+	}
+	auto &config = DBConfig::GetConfig(*context.db);
+	bool prev_value = config.options.enable_external_file_cache;
+	if (prev_value) {
+		config.options.enable_external_file_cache = false;
+		DUCKDB_LOG_DEBUG(*context.db,
+		                 "[Diskcache] md_mode: set enable_external_file_cache=false (was %s)",
+		                 prev_value ? "true" : "false");
+	}
+}
+
 // diskcache_config(directory, max_size_mb, nr_io_threads) - Configure the blob cache
 static void DiskcacheConfigFunction(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &global_state = data_p.global_state->Cast<DiskcacheGlobalState>();
@@ -213,6 +228,10 @@ static void DiskcacheConfigFunction(ClientContext &context, TableFunctionInput &
 
 	// Process the single configuration tuple
 	auto shared_cache = GetOrCreateDiskcache(*context.db);
+
+	// Enforce md_mode settings
+	EnforceMdModeSettings(context, *shared_cache);
+
 	bool success = false;
 	idx_t max_size_bytes = 0;
 	string cache_path = "";
@@ -283,6 +302,8 @@ static void DiskcacheStatsFunction(ClientContext &context, TableFunctionInput &d
 	// Load data on first call
 	if (global_state.tuples_processed == 0) {
 		auto cache = GetOrCreateDiskcache(*context.db);
+		// Enforce md_mode settings
+		EnforceMdModeSettings(context, *cache);
 		global_state.stats = cache->GetStatistics();
 	}
 	auto &stats = global_state.stats;
