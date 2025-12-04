@@ -213,9 +213,6 @@ static void DiskcacheConfigFunction(ClientContext &context, TableFunctionInput &
 
 	// Process the single configuration tuple
 	auto shared_cache = GetOrCreateDiskcache(*context.db);
-	if (shared_cache->md_mode) {
-		config.options.enable_external_file_cache = false;
-	}
 	bool success = false;
 	idx_t max_size_bytes = 0;
 	string cache_path = "";
