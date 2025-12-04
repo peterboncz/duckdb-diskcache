@@ -480,24 +480,30 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	loader.RegisterFunction(diskcache_hydrate_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_hydrate function");
 
-	// Register diskcache_logs table function - copy of duckdb_logs with deserialize method
-	auto &duckdb_logs_entry = loader.GetTableFunction("duckdb_logs");
-	if (!duckdb_logs_entry.functions.functions.empty()) {
-		// Get the first (and only) function from the set
-		TableFunction diskcache_logs_function = duckdb_logs_entry.functions.functions[0];
-		diskcache_logs_function.name = "diskcache_logs";
-		// Add deserialize method (empty, same pattern as DiskcacheStatsBindData)
-		diskcache_logs_function.deserialize = DiskcacheStatsBindData::Deserialize;
-		loader.RegisterFunction(diskcache_logs_function);
-		DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_logs function");
-	}
-
 	/// create an initial cache
 	idx_t max_size_mb, nr_io_threads;
 	default_cache_sizes(instance, max_size_mb, nr_io_threads);
 	auto shared_cache = GetOrCreateDiskcache(instance);
 	shared_cache->path_sep = instance.GetFileSystem().PathSeparator("");
-	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, ".diskcache" + shared_cache->path_sep, nr_io_threads);
+
+	// Check if /duckdb_temp exists to enable md_mode
+	auto &fs = instance.GetFileSystem();
+	string default_cache_dir = ".diskcache" + shared_cache->path_sep;
+	shared_cache->md_mode = fs.DirectoryExists("/duckdb_temp");
+	if (shared_cache->md_mode) {
+		DUCKDB_LOG_DEBUG(instance, "[Diskcache] md_mode enabled");
+		default_cache_dir = "/duckdb_temp/" + default_cache_dir;
+		config.options.enable_external_file_cache = false;
+		auto &duckdb_logs_entry = loader.GetTableFunction("duckdb_logs");
+		if (!duckdb_logs_entry.functions.functions.empty()) {
+			TableFunction diskcache_logs_function = duckdb_logs_entry.functions.functions[0];
+			diskcache_logs_function.name = "diskcache_logs";
+			diskcache_logs_function.deserialize = DiskcacheStatsBindData::Deserialize;
+			loader.RegisterFunction(diskcache_logs_function);
+			DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_logs function");
+		}
+	}
+	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, default_cache_dir, nr_io_threads);
 
 	// Register extension callback for automatic wrapping
 	config.extension_callbacks.push_back(make_uniq<DiskcacheExtensionCallback>());

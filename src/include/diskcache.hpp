@@ -92,6 +92,7 @@ struct Diskcache {
 	// Configuration and state
 	weak_ptr<DatabaseInstance> db_instance;
 	bool diskcache_initialized = false, diskcache_shutting_down = false;
+	bool md_mode = false; // enabled when /duckdb_temp exists
 	string path_sep;      // normally "/", but "\" on windows
 	string diskcache_dir; // where we store data temporarily
 	idx_t total_cache_capacity = 0;
@@ -299,6 +300,7 @@ struct Diskcache {
 	// Configuration and caching policy
 	void ConfigureCache(idx_t max_size_bytes, const string &directory, idx_t writer_threads);
 	bool CacheUnsafely(const string &uri) const;
+	string StripNonceSuffix(const string &uri) const;
 	void UpdateRegexPatterns(const string &regex_patterns_str);
 };
 
