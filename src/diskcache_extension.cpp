@@ -10,6 +10,7 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/logging/log_manager.hpp"
+#include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 
 namespace duckdb {
 
@@ -478,6 +479,18 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	diskcache_hydrate_function.bind = DiskcacheHydrateBind;
 	loader.RegisterFunction(diskcache_hydrate_function);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_hydrate function");
+
+	// Register diskcache_logs table function - copy of duckdb_logs with deserialize method
+	auto &duckdb_logs_entry = loader.GetTableFunction("duckdb_logs");
+	if (!duckdb_logs_entry.functions.functions.empty()) {
+		// Get the first (and only) function from the set
+		TableFunction diskcache_logs_function = duckdb_logs_entry.functions.functions[0];
+		diskcache_logs_function.name = "diskcache_logs";
+		// Add deserialize method (empty, same pattern as DiskcacheStatsBindData)
+		diskcache_logs_function.deserialize = DiskcacheStatsBindData::Deserialize;
+		loader.RegisterFunction(diskcache_logs_function);
+		DUCKDB_LOG_DEBUG(instance, "[Diskcache] Registered diskcache_logs function");
+	}
 
 	/// create an initial cache
 	idx_t max_size_mb, nr_io_threads;
