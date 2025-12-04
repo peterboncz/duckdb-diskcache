@@ -213,6 +213,9 @@ static void DiskcacheConfigFunction(ClientContext &context, TableFunctionInput &
 
 	// Process the single configuration tuple
 	auto shared_cache = GetOrCreateDiskcache(*context.db);
+	if (shared_cache->md_mode) {
+		config.options.enable_external_file_cache = false;
+	}
 	bool success = false;
 	idx_t max_size_bytes = 0;
 	string cache_path = "";
@@ -493,7 +496,6 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	if (shared_cache->md_mode) {
 		DUCKDB_LOG_DEBUG(instance, "[Diskcache] md_mode enabled");
 		default_cache_dir = "/duckdb_temp/" + default_cache_dir;
-		config.options.enable_external_file_cache = false;
 		auto &duckdb_logs_entry = loader.GetTableFunction("duckdb_logs");
 		if (!duckdb_logs_entry.functions.functions.empty()) {
 			TableFunction diskcache_logs_function = duckdb_logs_entry.functions.functions[0];

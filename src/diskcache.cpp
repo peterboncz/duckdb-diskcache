@@ -679,7 +679,7 @@ string Diskcache::StripNonceSuffix(const string &uri) const {
 	if (!md_mode) {
 		return uri;
 	}
-	// In md_mode, strip nonce suffixes like ".nonce-12345" before ".wal" or at end of URI
+	// strip nonce suffixes like ".nonce-12345" before ".wal" or at end of URI
 	// e.g., "file.nonce-12345.wal" -> "file.wal" or "file.nonce-12345" -> "file"
 	static const std::regex nonce_pattern(R"(\.nonce-\d+(?=\.wal$|$))");
 	return std::regex_replace(uri, nonce_pattern, "");
