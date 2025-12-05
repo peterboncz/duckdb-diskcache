@@ -204,11 +204,11 @@ static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, Table
 static void EnforceMdModeSettings(ClientContext &context, Diskcache &cache) {
 	auto &config = DBConfig::GetConfig(*context.db);
 	bool prev_value = config.options.enable_external_file_cache;
-	if (cache.md_mode) { 
+	if (cache.md_mode) {
 		config.options.enable_external_file_cache = false;
 	}
 	string msg = string("[Diskcache] md_mode=") + (cache.md_mode ? "true" : "false") +
-	             " set enable_external_file_cache=false (was " +  (prev_value ? "true)" : "false)");
+	             " set enable_external_file_cache=false (was " + (prev_value ? "true)" : "false)");
 	DUCKDB_LOG_DEBUG(*context.db, msg);
 }
 

@@ -9,11 +9,17 @@ namespace duckdb {
 
 unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFileInfo &info, FileOpenFlags flags,
                                                                     optional_ptr<FileOpener> opener) {
-	auto wrapped_handle = wrapped_fs->OpenFile(info.path, flags, opener);
+	auto path = info.path;
+	auto wrapped_handle = wrapped_fs->OpenFile(path, flags, opener);
 	if (!wrapped_handle) {
 		return nullptr;
 	}
-	auto cache_file = IsFakeS3(info.path) || cache->CacheUnsafely(info.path);
+	if (cache->md_mode) {
+		// strip nonce suffixes like ".nonce-12345" before ".wal" or at end of URI
+		static const std::regex nonce_pattern(R"(\.nonce-\d+(?=\.wal$|$))");
+		path = std::regex_replace(path, nonce_pattern, "");
+	}
+	auto cache_file = IsFakeS3(path) || cache->CacheUnsafely(path);
 	if (!cache_file && info.extended_info && !wrapped_handle->OnDiskFile()) {
 		// parquet_scan specialized for a Lake (duck,ice,delta) switch off validation, this allows for safe caching
 		const auto &open_options = info.extended_info->options;
@@ -22,15 +28,15 @@ unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFi
 			cache_file |= !validate_entry->second.GetValue<bool>(); // do not validate => free pass for caching
 		}
 	}
-	cache->LogDebug("OpenFileExtended(path=" + info.path + ", handle=" + (wrapped_handle?"ok":"null") +
-	                       ", cache_file=" + (wrapped_handle?"yes)":"no)"));
+	cache->LogDebug("OpenFileExtended(path=" + path + ", handle=" + (wrapped_handle ? "ok" : "null") +
+	                ", cache_file=" + (wrapped_handle ? "yes)" : "no)"));
 	// Don't wrap if we won't cache AND the handle can't seek (e.g., compressed files)
 	// Returning the original handle preserves correct CanSeek() behavior for non-seekable streams
 	if (!cache_file && !wrapped_handle->CanSeek()) {
 		return wrapped_handle;
 	}
 	// Wrap the handle - cache member will be nullptr for non-cached files, disabling caching logic
-	return make_uniq<DiskcacheFileHandle>(*this, info.path, std::move(wrapped_handle), cache_file ? cache : nullptr);
+	return make_uniq<DiskcacheFileHandle>(*this, path, std::move(wrapped_handle), cache_file ? cache : nullptr);
 }
 
 static idx_t ReadChunk(duckdb::FileSystem &wrapped_fs, DiskcacheFileHandle &handle, char *buf, idx_t location,

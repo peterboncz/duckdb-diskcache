@@ -594,6 +594,16 @@ void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 		blobfile_memcache = make_uniq<ExternalFileCache>(*db, true);
 		LogDebug("ConfigureCache: initialized blobfile_memcache for memory caching of disk-cached files");
 		StartIOThreads(max_io_threads);
+		// In md_mode, disable DuckDB's external file cache
+		if (md_mode) {
+			auto &config = DBConfig::GetConfig(*db);
+			config.options.enable_external_file_cache = false;
+			auto &ext_cache = ExternalFileCache::Get(*db);
+			bool prev_enabled = ext_cache.IsEnabled();
+			ext_cache.SetEnabled(false);
+			LogDebug("ConfigureCache: md_mode disabled ExternalFileCache (was " +
+			         string(prev_enabled ? "enabled)" : "disabled)"));
+		}
 		return;
 	}
 	// Cache already initialized, check what needs to be changed
@@ -675,25 +685,14 @@ void Diskcache::UpdateRegexPatterns(const string &regex_patterns_str) {
 	LogDebug("UpdateRegexPatterns: now using " + std::to_string(cached_regexps.size()) + " regex patterns");
 }
 
-string Diskcache::StripNonceSuffix(const string &uri) const {
-	if (!md_mode) {
-		return uri;
-	}
-	// strip nonce suffixes like ".nonce-12345" before ".wal" or at end of URI
-	// e.g., "file.nonce-12345.wal" -> "file.wal" or "file.nonce-12345" -> "file"
-	static const std::regex nonce_pattern(R"(\.nonce-\d+(?=\.wal$|$))");
-	return std::regex_replace(uri, nonce_pattern, "");
-}
-
 bool Diskcache::CacheUnsafely(const string &uri) const {
 	if (!StringUtil::StartsWith(uri, diskcache_dir)) { // never cache own files
 		std::lock_guard<std::mutex> lock(regex_mutex);
 		if (!cached_regexps.empty()) { // empty is default!
 			// the regexps allow unsafe caching (without worrying about etags/modified times): blindly cache
-			// In md_mode, strip nonce suffix before matching
-			string match_uri = StripNonceSuffix(uri);
-			for (const auto &compiled_pattern : cached_regexps) {
-				if (std::regex_search(match_uri, compiled_pattern)) {
+			for (idx_t i = 0; i < cached_regexps.size(); i++) {
+				if (std::regex_search(uri, cached_regexps[i])) {
+					LogDebug("CacheUnsafely: " + uri + " matched regex pattern #" + to_string(i));
 					return true;
 				}
 			}
