@@ -9,6 +9,7 @@
 
 #include "duckdb.hpp"
 #include "duckdb/common/file_opener.hpp"
+#include "duckdb/common/local_file_system.hpp"
 #include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/storage/external_file_cache.hpp"
 #include <regex>
@@ -96,6 +97,7 @@ struct Diskcache {
 	string path_sep;      // normally "/", but "\" on windows
 	string diskcache_dir; // where we store data temporarily
 	idx_t total_cache_capacity = 0;
+	LocalFileSystem local_fs; // Direct local filesystem for cache file operations (avoids recursion/overhead)
 
 	// Memory cache for disk-cached files (our own ExternalFileCache instance)
 	unique_ptr<ExternalFileCache> blobfile_memcache;

@@ -417,13 +417,8 @@ vector<DiskcacheRangeInfo> Diskcache::GetStatistics() const { // produce list of
 //===----------------------------------------------------------------------===//
 
 unique_ptr<FileHandle> Diskcache::TryOpenCacheFile(const string &file) {
-	auto db = db_instance.lock();
-	if (!db) {
-		return nullptr;
-	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db);
-		return fs.OpenFile(file, FileOpenFlags::FILE_FLAGS_READ);
+		return local_fs.OpenFile(file, FileOpenFlags::FILE_FLAGS_READ);
 	} catch (const std::exception &e) {
 		// File was evicted between metadata check and open - this can legally happen
 		LogDebug("TryOpenCacheFile: file not found (likely evicted): '" + file + "'");
@@ -462,8 +457,7 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 	}
 	auto buffer_ptr = buffer_handle.Ptr();
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db);
-		fs.Read(*handle, buffer_ptr, length, offset); // Read from disk starting at offset 0
+		local_fs.Read(*handle, buffer_ptr, length, offset); // Read from disk starting at offset 0
 	} catch (const std::exception &e) {
 		// File was evicted/deleted after opening but before reading - signal cache miss to fall back to original source
 		buffer_handle.Destroy();
@@ -481,21 +475,16 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 }
 
 bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t length) {
-	auto db = db_instance.lock();
-	if (!db) {
-		return false;
-	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db);
 		auto flags = // Open file for writing in append mode (create if not exists)
 		    FileOpenFlags::FILE_FLAGS_WRITE | FileOpenFlags::FILE_FLAGS_FILE_CREATE | FileOpenFlags::FILE_FLAGS_APPEND;
-		auto handle = fs.OpenFile(file, flags);
+		auto handle = local_fs.OpenFile(file, flags);
 		if (!handle) {
 			LogError("WriteToCacheFile: failed to open: '" + file + "'");
 			return false;
 		}
 		// Get current file size to know where we're appending
-		int64_t bytes_written = fs.Write(*handle, const_cast<void *>(buffer), length);
+		int64_t bytes_written = local_fs.Write(*handle, const_cast<void *>(buffer), length);
 		handle->Close(); // Close handle explicitly
 		if (bytes_written != static_cast<int64_t>(length)) {
 			LogError("WriteToCacheFile: failed to write all bytes to '" + file + "' (wrote " +
@@ -510,13 +499,8 @@ bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t l
 }
 
 bool Diskcache::DeleteCacheFile(const string &file) {
-	auto db = db_instance.lock();
-	if (!db) {
-		return false;
-	}
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db);
-		fs.RemoveFile(file);
+		local_fs.RemoveFile(file);
 		LogDebug("DeleteCacheFile: deleted file '" + file + "'");
 		return true;
 	} catch (const std::exception &e) {
@@ -542,11 +526,6 @@ void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 		return;
 	}
 
-	auto db = db_instance.lock();
-	if (!db) {
-		return;
-	}
-
 	// Format directory names as 3-digit and 2-digit hex
 	std::ostringstream xxx_stream, yy_stream;
 	xxx_stream << std::setfill('0') << std::setw(3) << std::hex << xxx;
@@ -554,13 +533,12 @@ void Diskcache::EnsureDirectoryExists(idx_t file_id) {
 
 	auto dir = diskcache_dir + xxx_stream.str();
 	try {
-		auto &fs = FileSystem::GetFileSystem(*db);
-		if (!fs.DirectoryExists(dir)) {
-			fs.CreateDirectory(dir);
+		if (!local_fs.DirectoryExists(dir)) {
+			local_fs.CreateDirectory(dir);
 		}
 		dir += path_sep + yy_stream.str();
-		if (!fs.DirectoryExists(dir)) {
-			fs.CreateDirectory(dir);
+		if (!local_fs.DirectoryExists(dir)) {
+			local_fs.CreateDirectory(dir);
 		}
 		subdir_created.set(idx);
 	} catch (const std::exception &e) {
@@ -705,12 +683,7 @@ bool Diskcache::CacheUnsafely(const string &uri) const {
 // Diskcache - configuration and utility methods
 //===----------------------------------------------------------------------===//
 bool Diskcache::CleanCacheDir() {
-	auto db = db_instance.lock();
-	if (!db) {
-		return false;
-	}
-	auto &fs = FileSystem::GetFileSystem(*db);
-	if (!fs.DirectoryExists(diskcache_dir)) {
+	if (!local_fs.DirectoryExists(diskcache_dir)) {
 		return true; // Directory doesn't exist, nothing to clean
 	}
 	auto success = true;
@@ -718,7 +691,7 @@ bool Diskcache::CleanCacheDir() {
 	// Recursive helper lambda to remove directory contents
 	std::function<void(const string &)> remove_dir_contents = [&](const string &dir_path) {
 		try {
-			fs.ListFiles(dir_path, [&](const string &name, bool is_dir) {
+			local_fs.ListFiles(dir_path, [&](const string &name, bool is_dir) {
 				if (name == "." || name == "..") {
 					return;
 				}
@@ -728,14 +701,14 @@ bool Diskcache::CleanCacheDir() {
 					remove_dir_contents(item_path);
 					// Then remove the subdirectory itself
 					try {
-						fs.RemoveDirectory(item_path);
+						local_fs.RemoveDirectory(item_path);
 					} catch (const std::exception &) {
 						success = false;
 					}
 				} else {
 					// Remove file
 					try {
-						fs.RemoveFile(item_path);
+						local_fs.RemoveFile(item_path);
 					} catch (const std::exception &) {
 						success = false;
 					}
@@ -755,14 +728,9 @@ bool Diskcache::CleanCacheDir() {
 }
 
 bool Diskcache::InitCacheDir() {
-	auto db = db_instance.lock();
-	if (!db) {
-		return false;
-	}
-	auto &fs = FileSystem::GetFileSystem(*db);
-	if (!fs.DirectoryExists(diskcache_dir)) {
+	if (!local_fs.DirectoryExists(diskcache_dir)) {
 		try {
-			fs.CreateDirectory(diskcache_dir);
+			local_fs.CreateDirectory(diskcache_dir);
 		} catch (const std::exception &e) {
 			LogError("Failed to create cache directory: " + string(e.what()));
 			return false;

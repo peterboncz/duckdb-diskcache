@@ -29,7 +29,7 @@ unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFi
 		}
 	}
 	cache->LogDebug("OpenFileExtended(path=" + path + ", handle=" + (wrapped_handle ? "ok" : "null") +
-	                ", cache_file=" + (wrapped_handle ? "yes)" : "no)"));
+	                ", cache_file=" + (cache_file ? "yes)" : "no)"));
 	// Don't wrap if we won't cache AND the handle can't seek (e.g., compressed files)
 	// Returning the original handle preserves correct CanSeek() behavior for non-seekable streams
 	if (!cache_file && !wrapped_handle->CanSeek()) {
