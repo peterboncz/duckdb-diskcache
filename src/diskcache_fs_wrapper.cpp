@@ -12,6 +12,7 @@ unique_ptr<FileHandle> DiskcacheFileSystemWrapper::OpenFileExtended(const OpenFi
 	auto path = info.path;
 	auto wrapped_handle = wrapped_fs->OpenFile(path, flags, opener);
 	if (!wrapped_handle) {
+		cache->LogDebug("OpenFileExtended(path=" + path + ") failed");
 		return nullptr;
 	}
 	if (cache->md_mode) {

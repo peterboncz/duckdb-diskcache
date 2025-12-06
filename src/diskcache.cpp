@@ -489,28 +489,33 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 	if (!handle) {
 		return CANCELED; // File was evicted or doesn't exist - cancel this read
 	}
-	// Allocate memory using the DuckDB buffer manager
+	// Allocate memory using the DuckDB buffer manager (only if we want to use memcache)
 	BufferHandle buffer_handle;
-	if (!AllocateInMemCache(buffer_handle, length)) {
-		return CANCELED; // allocation failed, cancel this read
-	}
-	auto buffer_ptr = buffer_handle.Ptr();
-	try {
-		local_fs.Read(*handle, buffer_ptr, length, offset); // Read from disk starting at offset 0
-	} catch (const std::exception &e) {
-		// File was evicted/deleted after opening but before reading - signal cache miss to fall back to original source
-		buffer_handle.Destroy();
-		LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file + "': " + string(e.what()));
-		return CANCELED;
-	}
-	std::memcpy(buffer, buffer_ptr, length); // Copy to output buffer
+	bool memcache_allocated = use_memcache && AllocateInMemCache(buffer_handle, length);
 
-	// Only insert into our memcache if DuckDB's external cache is disabled
-	if (use_memcache) {
+	if (memcache_allocated) {
+		// Read into memcache buffer, then copy to output
+		auto buffer_ptr = buffer_handle.Ptr();
+		try {
+			local_fs.Read(*handle, buffer_ptr, length, offset);
+		} catch (const std::exception &e) {
+			buffer_handle.Destroy();
+			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file + "': " + string(e.what()));
+			return CANCELED;
+		}
+		std::memcpy(buffer, buffer_ptr, length);
 		InsertRangeIntoMemcache(file, offset, buffer_handle, length);
 		return length; // All bytes from mem (just inserted)
+	} else {
+		// Read directly into output buffer (no memcache)
+		try {
+			local_fs.Read(*handle, buffer, length, offset);
+		} catch (const std::exception &e) {
+			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file + "': " + string(e.what()));
+			return CANCELED;
+		}
+		return 0; // All bytes from disk
 	}
-	return 0; // All bytes from disk
 }
 
 bool Diskcache::WriteToCacheFile(const string &file, const void *buffer, idx_t length) {
