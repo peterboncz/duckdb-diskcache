@@ -388,6 +388,8 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 		job.uri = range.uri;
 		job.range_start = range.start;
 		job.range_size = range.end - range.start;
+		cache->LogDebug("diskcache_hydrate: scheduling read uri=" + job.uri + " start=" + to_string(job.range_start) +
+		                " size=" + to_string(job.range_size));
 		cache->QueueIORead(job);
 	};
 
@@ -406,12 +408,22 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 		}
 
 		string uri = uri_ptr[uri_idx].GetString();
-		idx_t range_start = start_ptr[start_idx];
-		idx_t range_size = size_ptr[size_idx];
+		int64_t raw_start = start_ptr[start_idx];
+		int64_t raw_size = size_ptr[size_idx];
 
-		if (range_size == 0) {
+		// Validate inputs - negative values are invalid
+		if (raw_start < 0 || raw_size <= 0) {
+			cache->LogDebug("diskcache_hydrate: skipping invalid input row " + to_string(i) + " start=" +
+			                to_string(raw_start) + " size=" + to_string(raw_size));
 			continue;
 		}
+
+		idx_t range_start = static_cast<idx_t>(raw_start);
+		idx_t range_size = static_cast<idx_t>(raw_size);
+
+		cache->LogDebug("diskcache_hydrate: input row " + to_string(i) + " uri=" + uri + " start=" +
+		                to_string(range_start) + " size=" + to_string(range_size));
+
 		// Try to merge with current range
 		if (current_range != nullptr) {
 			// Check if we can merge: same URI and cost-effective
@@ -420,10 +432,15 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 				// Concatenate if cheaper to fetch combined than separate
 				if (EstimateS3(concatenated_size) < EstimateS3(current_range->original_size) + EstimateS3(range_size)) {
 					// Merge this range into current
+					cache->LogDebug("diskcache_hydrate: merging into current range, new end=" +
+					                to_string(range_start + range_size));
 					current_range->end = range_start + range_size;
 					current_range->original_size += range_size;
 					continue;
 				}
+				cache->LogDebug("diskcache_hydrate: NOT merging (cost), scheduling current and starting new");
+			} else {
+				cache->LogDebug("diskcache_hydrate: different URI, scheduling current and starting new");
 			}
 			schedule_range(*current_range); // Cannot merge - schedule current range and start new one
 		}
@@ -434,6 +451,8 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 		temp_range.end = range_start + range_size;
 		temp_range.original_size = range_size;
 		current_range = &temp_range;
+		cache->LogDebug("diskcache_hydrate: started new range start=" + to_string(range_start) + " end=" +
+		                to_string(range_start + range_size));
 	}
 
 	// Schedule final range if any
