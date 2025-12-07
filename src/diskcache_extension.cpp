@@ -413,16 +413,16 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 
 		// Validate inputs - negative values are invalid
 		if (raw_start < 0 || raw_size <= 0) {
-			cache->LogDebug("diskcache_hydrate: skipping invalid input row " + to_string(i) + " start=" +
-			                to_string(raw_start) + " size=" + to_string(raw_size));
+			cache->LogDebug("diskcache_hydrate: skipping invalid input row " + to_string(i) +
+			                " start=" + to_string(raw_start) + " size=" + to_string(raw_size));
 			continue;
 		}
 
 		idx_t range_start = static_cast<idx_t>(raw_start);
 		idx_t range_size = static_cast<idx_t>(raw_size);
 
-		cache->LogDebug("diskcache_hydrate: input row " + to_string(i) + " uri=" + uri + " start=" +
-		                to_string(range_start) + " size=" + to_string(range_size));
+		cache->LogDebug("diskcache_hydrate: input row " + to_string(i) + " uri=" + uri +
+		                " start=" + to_string(range_start) + " size=" + to_string(range_size));
 
 		// Try to merge with current range
 		if (current_range != nullptr) {
@@ -451,8 +451,8 @@ static void DiskcacheHydrateFunction(DataChunk &args, ExpressionState &state, Ve
 		temp_range.end = range_start + range_size;
 		temp_range.original_size = range_size;
 		current_range = &temp_range;
-		cache->LogDebug("diskcache_hydrate: started new range start=" + to_string(range_start) + " end=" +
-		                to_string(range_start + range_size));
+		cache->LogDebug("diskcache_hydrate: started new range start=" + to_string(range_start) +
+		                " end=" + to_string(range_start + range_size));
 	}
 
 	// Schedule final range if any

@@ -1,6 +1,7 @@
 #include "include/diskcache.hpp"
 #include "duckdb/common/opener_file_system.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/main/database_file_opener.hpp"
 
 namespace duckdb {
 
@@ -85,7 +86,7 @@ void Diskcache::InsertCache(const string &uri, idx_t pos, idx_t len, void *buf) 
 	if (!diskcache_initialized || diskcache_shutting_down || len == 0 || len > total_cache_capacity) {
 		return; // bail out if non initialized, shutting down, or impossible length
 	}
-	std::lock_guard<std::mutex> lock(regex_mutex);
+	std::lock_guard<std::mutex> lock(diskcache_mutex);
 	auto cache_entry = UpsertEntry(uri);
 
 	// Check (under lock) if range already cached (in the meantime, due to concurrent reads)
@@ -274,13 +275,13 @@ void Diskcache::ProcessReadJob(DiskcacheReadJob &job) {
 		if (!db) {
 			return; // Database is shutting down
 		}
-		// Open file and allocate buffer
-		auto &fs = FileSystem::GetFileSystem(*db);
-		auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
+		// Use DatabaseFileSystem which provides a FileOpener with database-level settings/secrets
+		DatabaseFileSystem db_fs(*db);
+		auto handle = db_fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
 		auto buffer = unique_ptr<char[]>(new char[job.range_size]);
 
 		// Read data from file
-		fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
+		db_fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
 
 		// Insert into cache (this will queue a write job)
 		InsertCache(job.uri, job.range_start, job.range_size, buffer.get());
@@ -500,7 +501,8 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 			local_fs.Read(*handle, buffer_ptr, length, offset);
 		} catch (const std::exception &e) {
 			buffer_handle.Destroy();
-			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file + "': " + string(e.what()));
+			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file +
+			         "': " + string(e.what()));
 			return CANCELED;
 		}
 		std::memcpy(buffer, buffer_ptr, length);
@@ -511,7 +513,8 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 		try {
 			local_fs.Read(*handle, buffer, length, offset);
 		} catch (const std::exception &e) {
-			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file + "': " + string(e.what()));
+			LogDebug("ReadFromCacheFile: read failed (likely evicted during read): '" + file +
+			         "': " + string(e.what()));
 			return CANCELED;
 		}
 		return 0; // All bytes from disk
