@@ -280,9 +280,9 @@ void Diskcache::ProcessReadJob(DiskcacheReadJob &job) {
 
 		// Use ClientContext if available (provides access to secrets), fall back to DatabaseFileSystem
 		if (job.context) {
-			ClientContextFileOpener opener(*job.context);
+//			ClientContextFileOpener opener(*job.context);
 			auto &fs = job.context->db->GetFileSystem();
-			auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ, &opener);
+			auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
 			fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
 		} else {
 			DatabaseFileSystem db_fs(*db);
