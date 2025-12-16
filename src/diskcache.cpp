@@ -195,14 +195,12 @@ void Diskcache::QueueIOWrite(DiskcacheWriteJob &job, idx_t partition) {
 }
 
 void Diskcache::QueueIORead(DiskcacheReadJob &job) {
-	// Hash-based partitioning by URI to ensure same file goes to same thread
-	hash_t uri_hash = Hash(string_t(job.uri.c_str(), static_cast<uint32_t>(job.uri.length())));
-	idx_t target_thread = uri_hash % nr_io_threads;
+	// Add to the single shared read queue - all IO threads can pick up jobs
 	{
-		std::lock_guard<std::mutex> lock(io_mutexes[target_thread]);
-		read_queues[target_thread].emplace(std::move(job));
+		std::lock_guard<std::mutex> lock(read_queue_mutex);
+		read_queue.emplace(std::move(job));
 	}
-	io_cvs[target_thread].notify_one();
+	read_queue_cv.notify_one(); // Wake up one waiting thread
 }
 
 void Diskcache::StartIOThreads(idx_t thread_count) {
@@ -230,6 +228,8 @@ void Diskcache::StopIOThreads() {
 	for (idx_t i = 0; i < nr_io_threads; i++) {
 		io_cvs[i].notify_all();
 	}
+	read_queue_cv.notify_all(); // Also wake up threads waiting on read queue
+
 	// Wait for all threads to finish gracefully
 	for (idx_t i = 0; i < nr_io_threads; i++) {
 		if (io_threads[i].joinable()) {
@@ -270,31 +270,48 @@ void Diskcache::ProcessWriteJob(DiskcacheWriteJob &job) {
 	}
 }
 
-void Diskcache::ProcessReadJob(DiskcacheReadJob &job) {
+void Diskcache::ProcessReadJob(DiskcacheReadJob &job, idx_t thread_id) {
+	auto start_time = std::chrono::steady_clock::now();
+	bool success = false;
+
 	try {
 		auto db = db_instance.lock();
-		if (!db) {
-			return; // Database is shutting down
+		if (!db || !job.coord || !job.coord->context) {
+			// Set error result if we have a result pointer (0ms since we didn't do anything)
+			if (job.result) {
+				*job.result = MakeHydrateResult(job.batch_id, static_cast<uint8_t>(thread_id), 0, true);
+			}
+			if (job.coord) {
+				job.coord->OnJobComplete();
+			}
+			return; // Database is shutting down or invalid coordination
 		}
 		auto buffer = unique_ptr<char[]>(new char[job.range_size]);
 
-		// Use ClientContext if available (provides access to secrets), fall back to DatabaseFileSystem
-		if (job.context) {
-//			ClientContextFileOpener opener(*job.context);
-			auto &fs = job.context->db->GetFileSystem();
-			auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
-			fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
-		} else {
-			DatabaseFileSystem db_fs(*db);
-			auto handle = db_fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
-			db_fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
-		}
+		// Use the ClientContext from the coordination struct (has active transaction for secret access)
+		auto &fs = job.coord->context->db->GetFileSystem();
+		auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ);
+		fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
 
 		// Insert into cache (this will queue a write job)
 		InsertCache(job.uri, job.range_start, job.range_size, buffer.get());
+		success = true;
 	} catch (const std::exception &e) {
 		LogError("ProcessReadJob: failed to read '" + job.uri + "' at " + to_string(job.range_start) + ": " +
 		         string(e.what()));
+	}
+
+	// Always measure elapsed time and set result (with error flag if failed)
+	auto end_time = std::chrono::steady_clock::now();
+	auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+	if (job.result) {
+		*job.result =
+		    MakeHydrateResult(job.batch_id, static_cast<uint8_t>(thread_id), static_cast<uint64_t>(ms), !success);
+	}
+
+	// Signal completion to the coordination struct
+	if (job.coord) {
+		job.coord->OnJobComplete();
 	}
 }
 
@@ -302,24 +319,44 @@ void Diskcache::MainIOThreadLoop(idx_t thread_id) {
 	LogDebug("MainIOThreadLoop " + std::to_string(thread_id) + " started");
 	while (!shutdown_io_threads) {
 		try {
-			std::unique_lock<std::mutex> lock(io_mutexes[thread_id]);
-			io_cvs[thread_id].wait(lock, [this, thread_id] {
-				return !write_queues[thread_id].empty() || !read_queues[thread_id].empty() || shutdown_io_threads;
-			});
-			if (shutdown_io_threads && write_queues[thread_id].empty() && read_queues[thread_id].empty()) {
-				break;
+			// First check per-thread write queue (writes have priority)
+			{
+				std::unique_lock<std::mutex> write_lock(io_mutexes[thread_id]);
+				if (!write_queues[thread_id].empty()) {
+					auto write_job = std::move(write_queues[thread_id].front());
+					write_queues[thread_id].pop();
+					write_lock.unlock();
+					ProcessWriteJob(write_job);
+					continue; // Check for more work
+				}
 			}
-			// Process writes with priority
-			if (!write_queues[thread_id].empty()) {
-				auto write_job = std::move(write_queues[thread_id].front());
-				write_queues[thread_id].pop();
-				lock.unlock();
-				ProcessWriteJob(write_job);
-			} else if (!read_queues[thread_id].empty()) {
-				auto read_job = std::move(read_queues[thread_id].front());
-				read_queues[thread_id].pop();
-				lock.unlock();
-				ProcessReadJob(read_job);
+
+			// Then check shared read queue
+			{
+				std::unique_lock<std::mutex> read_lock(read_queue_mutex);
+				if (!read_queue.empty()) {
+					auto read_job = std::move(read_queue.front());
+					read_queue.pop();
+					read_lock.unlock();
+					ProcessReadJob(read_job, thread_id);
+					continue; // Check for more work
+				}
+			}
+
+			// No work available, wait on either queue
+			// We use a short timeout to periodically check both queues
+			{
+				std::unique_lock<std::mutex> write_lock(io_mutexes[thread_id]);
+				io_cvs[thread_id].wait_for(write_lock, std::chrono::milliseconds(10), [this, thread_id] {
+					return !write_queues[thread_id].empty() || shutdown_io_threads;
+				});
+			}
+
+			// Also briefly wait on read queue
+			if (!shutdown_io_threads) {
+				std::unique_lock<std::mutex> read_lock(read_queue_mutex);
+				read_queue_cv.wait_for(read_lock, std::chrono::milliseconds(10),
+				                       [this] { return !read_queue.empty() || shutdown_io_threads; });
 			}
 		} catch (const std::exception &e) {
 			LogError("MainIOThreadLoop " + std::to_string(thread_id) + " caught exception: " + string(e.what()));

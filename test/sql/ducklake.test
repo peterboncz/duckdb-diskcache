@@ -1,7 +1,6 @@
 # name: test/sql/ducklake.test
 # description: test diskcache extension with ducklake
 # group: [sql]
-# FIXME: ducklake has an allocation leak in debug builds - this test passes in release
 
 require parquet
 

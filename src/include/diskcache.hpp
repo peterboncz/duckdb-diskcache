@@ -76,12 +76,58 @@ struct DiskcacheWriteJob {
 	idx_t file_id;                     // File ID for directory creation
 };
 
-// DiskcacheReadJob - async read job for prefetching (used during fast cache hydration)
+// Forward declaration
+struct HydrateCoordination;
+
+// Hydrate result format: [error:1bit][ms:39bits][thread_id:8bits][batch_id:16bits]
+// - batch_id (bits 0-15): batch identifier for merged ranges
+// - thread_id (bits 16-23): IO thread that processed this job (0-255)
+// - ms (bits 24-62): milliseconds taken to read (39 bits, max ~17 years)
+// - error (bit 63): set if there was an error/exception during read
+constexpr uint64_t HYDRATE_ERROR_FLAG = 1ULL << 63; // Highest bit for error
+
+inline uint64_t MakeHydrateResult(uint16_t batch_id, uint8_t thread_id, uint64_t ms, bool error = false) {
+	uint64_t result = static_cast<uint64_t>(batch_id) | (static_cast<uint64_t>(thread_id) << 16) |
+	                  ((ms & 0x7FFFFFFFFFULL) << 24); // 39 bits for ms
+	if (error) {
+		result |= HYDRATE_ERROR_FLAG;
+	}
+	return result;
+}
+
+// DiskcacheReadJob - read job for prefetching (used during synchronous cache hydration)
 struct DiskcacheReadJob {
-	string uri;             // Cache uri of the blob that gets cached
-	idx_t range_start;      // Start position in file
-	idx_t range_size;       // Bytes to read
-	ClientContext *context; // Client context for secret access (readonly)
+	string uri;                 // Cache uri of the blob that gets cached
+	idx_t range_start;          // Start position in file
+	idx_t range_size;           // Bytes to read
+	HydrateCoordination *coord; // Coordination struct (contains context, counter, sync)
+	uint64_t *result;           // Pointer to result value (set by IO thread)
+	uint16_t batch_id;          // Batch ID for this job
+};
+
+// HydrateCoordination - coordination struct for synchronous hydrate batches
+struct HydrateCoordination {
+	ClientContext *context;       // Client context for file operations (has active transaction)
+	std::atomic<idx_t> remaining; // Number of jobs remaining in this batch
+	std::mutex mutex;             // Protects condition variable
+	std::condition_variable cv;   // Signaled when remaining reaches 0
+
+	explicit HydrateCoordination(ClientContext *ctx, idx_t count) : context(ctx), remaining(count) {
+	}
+
+	// Called by IO thread when a job completes
+	void OnJobComplete() {
+		if (--remaining == 0) {
+			std::lock_guard<std::mutex> lock(mutex);
+			cv.notify_all();
+		}
+	}
+
+	// Called by main thread to wait for all jobs to complete
+	void WaitForCompletion() {
+		std::unique_lock<std::mutex> lock(mutex);
+		cv.wait(lock, [this] { return remaining.load() == 0; });
+	}
 };
 
 //===----------------------------------------------------------------------===//
@@ -122,18 +168,21 @@ struct Diskcache {
 
 	// Multi-threaded background I/O system
 	std::array<std::thread, MAX_IO_THREADS> io_threads;
-	std::array<std::queue<DiskcacheWriteJob>, MAX_IO_THREADS> write_queues;
-	std::array<std::queue<DiskcacheReadJob>, MAX_IO_THREADS> read_queues;
-	std::array<std::mutex, MAX_IO_THREADS> io_mutexes;
-	std::array<std::condition_variable, MAX_IO_THREADS> io_cvs;
+	std::array<std::queue<DiskcacheWriteJob>, MAX_IO_THREADS> write_queues; // Per-thread write queues
+	std::array<std::mutex, MAX_IO_THREADS> io_mutexes;                      // Per-thread mutexes for write queues
+	std::array<std::condition_variable, MAX_IO_THREADS> io_cvs;             // Per-thread CVs
 	std::atomic<bool> shutdown_io_threads;
-	std::atomic<idx_t> read_job_counter;
 	idx_t nr_io_threads;
+
+	// Single shared read queue for hydrate jobs (all threads pull from this)
+	std::queue<DiskcacheReadJob> read_queue;
+	std::mutex read_queue_mutex;
+	std::condition_variable read_queue_cv;
 
 	// Constructor/Destructor
 	explicit Diskcache(DatabaseInstance *db_instance_p = nullptr)
 	    : key_cache(make_uniq<unordered_map<string, unique_ptr<DiskcacheEntry>>>()), shutdown_io_threads(false),
-	      read_job_counter(0), nr_io_threads(1) {
+	      nr_io_threads(1) {
 		if (db_instance_p) {
 			db_instance = db_instance_p->shared_from_this();
 		}
@@ -294,7 +343,7 @@ struct Diskcache {
 	// Thread management
 	void MainIOThreadLoop(idx_t thread_id);
 	void ProcessWriteJob(DiskcacheWriteJob &job);
-	void ProcessReadJob(DiskcacheReadJob &job);
+	void ProcessReadJob(DiskcacheReadJob &job, idx_t thread_id);
 	void QueueIOWrite(DiskcacheWriteJob &job, idx_t partition);
 	void QueueIORead(DiskcacheReadJob &job);
 	void StartIOThreads(idx_t thread_count);
