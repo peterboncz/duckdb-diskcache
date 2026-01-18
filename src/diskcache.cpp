@@ -291,7 +291,7 @@ void Diskcache::ProcessReadJob(DiskcacheReadJob &job, idx_t thread_id) {
 		// Use the ClientContext from the coordination struct (has active transaction for secret access)
 		// Create a FileOpener to pass secrets to the filesystem
 		ClientContextFileOpener opener(*job.coord->context);
-		auto &fs = job.coord->context->db->GetFileSystem();
+		auto &fs = *job.coord->context->db->config.file_system;
 		auto handle = fs.OpenFile(job.uri, FileOpenFlags::FILE_FLAGS_READ, &opener);
 		fs.Read(*handle, buffer.get(), job.range_size, job.range_start);
 
