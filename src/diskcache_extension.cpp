@@ -11,6 +11,7 @@
 #include "duckdb/common/serializer/deserializer.hpp"
 #include "duckdb/logging/log_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
+#include "duckdb/main/extension_callback_manager.hpp"
 
 namespace duckdb {
 
@@ -202,10 +203,10 @@ static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, Table
 
 // Helper to enforce enable_external_file_cache = false in md_mode
 static void EnforceMdModeSettings(ClientContext &context, Diskcache &cache) {
-	auto &config = DBConfig::GetConfig(*context.db);
-	bool prev_value = config.options.enable_external_file_cache;
+	auto &ext_cache = ExternalFileCache::Get(*context.db);
+	bool prev_value = ext_cache.IsEnabled();
 	if (cache.md_mode) {
-		config.options.enable_external_file_cache = false;
+		ext_cache.SetEnabled(false);
 	}
 	string msg = string("[Diskcache] md_mode=") + (cache.md_mode ? "true" : "false") +
 	             " set enable_external_file_cache=false (was " + (prev_value ? "true)" : "false)");
@@ -580,7 +581,7 @@ void DiskcacheExtension::Load(ExtensionLoader &loader) {
 	shared_cache->ConfigureCache(max_size_mb * 1024 * 1024, default_cache_dir, nr_io_threads);
 
 	// Register extension callback for automatic wrapping
-	config.extension_callbacks.push_back(make_uniq<DiskcacheExtensionCallback>());
+	config.GetCallbackManager().Register(make_shared_ptr<DiskcacheExtensionCallback>());
 
 	// Wrap the filesystem (in case some extensions were already loaded)
 	WrapExistingFileSystem(instance);

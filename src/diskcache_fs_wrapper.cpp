@@ -142,7 +142,7 @@ shared_ptr<Diskcache> GetOrCreateDiskcache(DatabaseInstance &instance) {
 	}
 	// Create new cache and store in ObjectCache
 	auto new_cache = make_shared_ptr<Diskcache>(&instance);
-	auto cache_entry = make_shared_ptr<DiskcacheObjectCacheEntry>(new_cache);
+	shared_ptr<DiskcacheObjectCacheEntry> cache_entry(new DiskcacheObjectCacheEntry(new_cache));
 	object_cache.Put("diskcache_instance", cache_entry);
 	DUCKDB_LOG_DEBUG(instance, "[Diskcache] Created and stored new Diskcache in ObjectCache");
 	return new_cache;

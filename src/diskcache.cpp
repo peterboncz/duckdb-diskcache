@@ -3,6 +3,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/main/database_file_opener.hpp"
 #include "duckdb/main/client_context_file_opener.hpp"
+#include "duckdb/storage/external_file_cache.hpp"
 
 namespace duckdb {
 
@@ -523,8 +524,8 @@ idx_t Diskcache::ReadFromCacheFile(const string &file, void *buffer, idx_t &leng
 		return CANCELED;
 	}
 	// Check if we should use our memcache (only if DuckDB's external cache is disabled)
-	auto &config = DBConfig::GetConfig(*db);
-	bool use_memcache = !config.options.enable_external_file_cache;
+	auto &ext_cache = ExternalFileCache::Get(*db);
+	bool use_memcache = !ext_cache.IsEnabled();
 
 	// If external cache is enabled but we have data in memcache, clear it
 	if (!use_memcache && memcache_size > 0) {
@@ -673,8 +674,6 @@ void Diskcache::ConfigureCache(idx_t max_size_bytes, const string &base_dir, idx
 		StartIOThreads(max_io_threads);
 		// In md_mode, disable DuckDB's external file cache
 		if (md_mode) {
-			auto &config = DBConfig::GetConfig(*db);
-			config.options.enable_external_file_cache = false;
 			auto &ext_cache = ExternalFileCache::Get(*db);
 			bool prev_enabled = ext_cache.IsEnabled();
 			ext_cache.SetEnabled(false);

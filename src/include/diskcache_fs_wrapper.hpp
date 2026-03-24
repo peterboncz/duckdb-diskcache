@@ -29,6 +29,9 @@ public:
 	static string ObjectType() {
 		return "Diskcache";
 	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return optional_idx();
+	}
 	~DiskcacheObjectCacheEntry() override {
 		// Mark cache as shutting down early to prevent new insertions during checkpoint
 		if (cache) {
@@ -123,6 +126,12 @@ public:
 		EvictFile(uri);
 		return wrapped_fs->TryRemoveFile(uri, opener);
 	}
+	void RemoveFiles(const vector<string> &filenames, optional_ptr<FileOpener> opener = nullptr) override {
+		for (const auto &uri : filenames) {
+			EvictFile(uri);
+		}
+		wrapped_fs->RemoveFiles(filenames, opener);
+	}
 	// these two are not expected to be implemented in blob filesystems, but for completeness/safety they evict as well
 	void Truncate(FileHandle &handle, int64_t new_size) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
@@ -174,6 +183,10 @@ public:
 	FileType GetFileType(FileHandle &handle) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
 		return cache_handle.wrapped_handle->GetType();
+	}
+	FileMetadata Stats(FileHandle &handle) override {
+		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
+		return wrapped_fs->Stats(*cache_handle.wrapped_handle);
 	}
 	void FileSync(FileHandle &handle) override {
 		auto &cache_handle = handle.Cast<DiskcacheFileHandle>();
@@ -246,6 +259,12 @@ public:
 	}
 	bool SubSystemIsDisabled(const string &name) override {
 		return wrapped_fs->SubSystemIsDisabled(name);
+	}
+	bool IsDisabledForPath(const string &path) override {
+		return wrapped_fs->IsDisabledForPath(path);
+	}
+	string CanonicalizePath(const string &path, optional_ptr<FileOpener> opener = nullptr) override {
+		return wrapped_fs->CanonicalizePath(path, opener);
 	}
 	unique_ptr<FileHandle> OpenCompressedFile(QueryContext context, unique_ptr<FileHandle> handle,
 	                                          bool write) override {
