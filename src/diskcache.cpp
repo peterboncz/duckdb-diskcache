@@ -51,10 +51,11 @@ idx_t Diskcache::ReadFromCache(const string &uri, idx_t pos, idx_t &len, void *b
 	hit_range->bytes_from_cache += hit_size;
 	TouchLRU(hit_range); // Update LRU position
 
-	// Check if we can read from WriteBuffer (write in progress or completed
+	// Check if we can read from WriteBuffer (write in progress or completed)
 	std::shared_ptr<char> buffer_data = hit_range->write_buf->buf;
 	if (buffer_data) { // we obtained the shared_ptr reference, can use it now safely
 		memcpy(buf, buffer_data.get() + offset, hit_size);
+		hit_range->bytes_from_mem += hit_size; // write buffer is in memory
 		lock.unlock();
 		return hit_size;
 	}
