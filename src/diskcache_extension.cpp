@@ -203,13 +203,14 @@ static unique_ptr<FunctionData> DiskcacheStatsBind(ClientContext &context, Table
 
 // Helper to enforce enable_external_file_cache = false in md_mode
 static void EnforceMdModeSettings(ClientContext &context, Diskcache &cache) {
+	if (!cache.md_mode) {
+		return; // Only enforce settings when md_mode is active
+	}
 	auto &ext_cache = ExternalFileCache::Get(*context.db);
 	bool prev_value = ext_cache.IsEnabled();
-	if (cache.md_mode) {
-		ext_cache.SetEnabled(false);
-	}
-	string msg = string("[Diskcache] md_mode=") + (cache.md_mode ? "true" : "false") +
-	             " set enable_external_file_cache=false (was " + (prev_value ? "true)" : "false)");
+	ext_cache.SetEnabled(false);
+	string msg = string("[Diskcache] md_mode=true set enable_external_file_cache=false (was ") +
+	             (prev_value ? "true)" : "false)");
 	DUCKDB_LOG_DEBUG(*context.db, msg);
 }
 

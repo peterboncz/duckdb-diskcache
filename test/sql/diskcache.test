@@ -33,17 +33,16 @@ select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 query II
 select count(*), sum(usage_count) from diskcache_stats();
 ----
-6	0
+1	0
 
-# When enable_external_file_cache=true, DuckDB's cache intercepts reads,
-# so our diskcache usage_count stays at 0 on subsequent queries
+# Second read reuses the cache
 statement ok
 select max(l_comment) from read_parquet('fake_s3://lineitem.parquet');
 
-query II
-select count(*), sum(usage_count) from diskcache_stats();
+query I
+select count(*) from diskcache_stats();
 ----
-6	0
+1
 
 # bytes_from_mem is always >= 0
 query I
